@@ -105,8 +105,10 @@ def bookings(request):
                 raise PermissionDenied()
             return Response({'booking_id': previous.pk, 'status': previous.status, 'payment_status': previous.payment_status,
                              'receipt_token': signing.dumps({'booking_id': previous.pk, 'request_key': str(previous.request_key)}, salt='receipt')})
-        snapshot = quote(data, customer)
-        verify_quote(data.get('quote_token'), snapshot, customer)
+        is_frontdesk = IsFrontDesk().has_permission(request, None)
+        snapshot = quote(data, customer, allow_missing_price=is_frontdesk)
+        if not is_frontdesk:
+            verify_quote(data.get('quote_token'), snapshot, customer)
         if not customer:
             name = str(data.get('customerName', '')).strip()
             phone = ''.join(c for c in str(data.get('phone', '')) if c.isdigit())

@@ -32,7 +32,10 @@ def customer_for(request, data):
     return None
 
 
-def quote(data, customer=None):
+WALKIN_PRICES = {'cert_15d': Decimal('1000.00'), 'cert_90d': Decimal('3000.00')}
+
+
+def quote(data, customer=None, allow_missing_price=False):
     policy = CheckoutPolicy.objects.filter(pk=1, approved=True).first()
     if not policy:
         raise ValidationError('รอยืนยันตารางราคาและนโยบาย VAT จากผู้ดูแลก่อนรับชำระ')
@@ -52,8 +55,12 @@ def quote(data, customer=None):
     else:
         rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=brand, member_tier__iexact=tier).first()
         if not rate:
-            raise ValidationError('ยังไม่ตั้งราคาแพ็กเกจ/ประเภท/แบรนด์/ระดับสมาชิกนี้ กรุณาติดต่อเจ้าหน้าที่')
-        amount = rate.amount
+            if allow_missing_price and code in WALKIN_PRICES:
+                amount = WALKIN_PRICES[code]
+            else:
+                raise ValidationError('ยังไม่ตั้งราคาแพ็กเกจ/ประเภท/แบรนด์/ระดับสมาชิกนี้ กรุณาติดต่อเจ้าหน้าที่')
+        else:
+            amount = rate.amount
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')
