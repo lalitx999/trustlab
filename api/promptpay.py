@@ -28,17 +28,17 @@ def generate_promptpay_payload(phone_or_taxid: str, amount: float = None) -> str
     # Format target according to phone vs tax id
     if len(target) == 13:
         # Tax ID or National ID
-        merchant_info = f"0010A0000006770101110213{target}"
+        merchant_info = f"0016A0000006770101110213{target}"
     elif len(target) in (9, 10):
         # Mobile Phone
         # Strip leading 0 if any, then pad to 9 digits, prefix with 0066 (Thailand country code)
         if target.startswith('0'):
             target = target[1:]
         phone_formatted = f"0066{target.zfill(9)}"
-        merchant_info = f"0010A0000006770101110113{phone_formatted}"
+        merchant_info = f"0016A0000006770101110113{phone_formatted}"
     else:
         # Fallback raw merchant info
-        merchant_info = f"0010A00000067701011103{len(target):02d}{target}"
+        merchant_info = f"0016A00000067701011103{len(target):02d}{target}"
 
     # Build parts
     parts = []

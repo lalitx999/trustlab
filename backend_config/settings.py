@@ -17,15 +17,15 @@ except ImportError:
 
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-fallback-key-for-local-development')
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+if not DEBUG and SECRET_KEY == 'django-insecure-fallback-key-for-local-development':
+    from django.core.exceptions import ImproperlyConfigured
+    if os.environ.get('DJANGO_SETTINGS_MODULE') != 'backend_config.test_settings':
+        raise ImproperlyConfigured('Set SECRET_KEY for the backend environment')
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
 
-CSRF_TRUSTED_ORIGINS = [
-    'https://app2.tanchonhomserverxxx.online',
-    'http://localhost:3000',
-    'http://127.0.0.1:8000',
-]
+CSRF_TRUSTED_ORIGINS = [v.strip() for v in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if v.strip()]
 
 # Application definition
 INSTALLED_APPS = [
@@ -132,17 +132,12 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings (Allow Next.js frontend calls)
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://www.trustlabthailand.com",
-    "https://trustlabthailand.com",
-    "https://trustlab-ly0qhnz05-thde-v.vercel.app",
-]
+CORS_ALLOWED_ORIGINS = [v.strip() for v in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',') if v.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
 # Django REST Framework Settings
 REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': ('api.permissions.IsStaff',),
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
@@ -183,3 +178,14 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50 MB
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
 
 
+
+PROMPTPAY_RECEIVER_ID = os.getenv('PROMPTPAY_RECEIVER_ID', '')
+PUBLIC_SITE_URL = os.getenv('PUBLIC_SITE_URL', 'http://localhost:3000').rstrip('/')
+CERTIFICATE_NOTICE = os.getenv('CERTIFICATE_NOTICE', '')
+INSTAGRAM_URL = os.getenv('INSTAGRAM_URL', '')
+LINE_OFFICIAL_URL = os.getenv('LINE_OFFICIAL_URL', '')
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+THAI_FONT_PATH = os.getenv('THAI_FONT_PATH', '/usr/share/fonts/truetype/tlwg/Garuda.ttf')

@@ -5,6 +5,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 import qrcode
+from django.conf import settings
+from django.utils import timezone
 
 # We will use Helvetica and Helvetica-Bold for professional look
 FONT_REGULAR = "Helvetica"
@@ -73,7 +75,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.rotate(35)
         c.drawCentredString(0, 0, "REVOKED / CANCELLED")
         c.restoreState()
-    elif certificate.cert_status == 'expired':
+    elif certificate.cert_status == 'expired' or (certificate.expires_at and timezone.now() >= certificate.expires_at):
         c.saveState()
         c.setFillColorRGB(0.99, 0.96, 0.91)  # Soft light orange/yellow
         c.setFont(FONT_BOLD, 42)
@@ -86,12 +88,13 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.saveState()
     c.setFont(FONT_BOLD, 18)
     c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawCentredString(width / 2.0, height - 55, "TRUST LAB")
+    logo_path = os.path.join(settings.BASE_DIR, 'assets', 'logo-trust-lab.png')
+    c.drawImage(logo_path, width / 2 - 25, height - 70, width=50, height=50, preserveAspectRatio=True, anchor='c', mask='auto')
     
     c.setFont(FONT_REGULAR, 7)
     c.setFillColorRGB(0.4, 0.4, 0.4)
     # Adding thin spacing for tracking effect
-    c.drawCentredString(width / 2.0, height - 67, "T  H  A  I  L  A  N  D")
+
     
     c.setFont(FONT_REGULAR, 6)
     c.setFillColorRGB(0.5, 0.5, 0.5)
@@ -177,7 +180,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     }.get(job.category, job.category or "Luxury Handbag")
     
     # Format issue date
-    issue_date = certificate.created_at.strftime("%d %B %Y").upper()
+    issue_date = timezone.localtime(certificate.created_at).strftime("%d %B %Y").upper()
     serial_val = getattr(job, 'serial_number', '') or getattr(certificate, 'serial_number', '') or '-'
     
     # Draw Specifications Table
@@ -224,7 +227,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     
     # Generate Verification QR Code in memory
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
-    verify_url = f"https://www.trustlabthailand.com/verify/{certificate.cert_code or certificate.id}"
+    verify_url = f"{settings.PUBLIC_SITE_URL}/verify?id={certificate.cert_code or certificate.id}"
     qr.add_data(verify_url)
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="black", back_color="white")
@@ -320,7 +323,11 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         val_title = "VALID FOR 90 DAYS (3 MONTHS)"
         val_sub = "This certificate is valid for 90 days from issuance date."
 
-    expire_dt = certificate.created_at.date() + datetime.timedelta(days=val_days)
+    if certificate.validity_days:
+        val_days = certificate.validity_days
+        val_title = f"VALID FOR {val_days} DAYS"
+        val_sub = f"Valid for {val_days} days from issuance."
+    expire_dt = timezone.localtime(certificate.expires_at).date() if certificate.expires_at else timezone.localtime(certificate.created_at).date() + datetime.timedelta(days=val_days)
     expiry_date_str = expire_dt.strftime("%d %B %Y").upper()
 
     # Left Card: Validity Duration
@@ -369,13 +376,24 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         "This certificate confirms the authenticity of the item examined by TRUST LAB THAILAND based on the standard inspection process.",
         "This certificate does not represent a guarantee of the item or any affiliated brand."
     ]
+    if settings.CERTIFICATE_NOTICE:
+        import textwrap
+        bullets = textwrap.wrap(settings.CERTIFICATE_NOTICE, width=115)
+        if len(bullets) > 5:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError('ข้อความ Important Notice ยาวเกินพื้นที่ใบรับรอง กรุณาปรับรูปแบบก่อนเผยแพร่')
     for idx, bullet in enumerate(bullets):
         c.drawString(40, notice_y - 10 - (idx * 8), f"·  {bullet}")
         
     # Footer Links & Tiny verification indicator
-    c.drawString(40, 42, "www.trustlabthailand.com")
-    c.drawString(180, 42, "instagram: @trustlabthailand")
-    c.drawString(320, 42, "line: @trustlabthailand")
+    c.drawString(40, 42, "Website")
+    c.linkURL(settings.PUBLIC_SITE_URL, (40, 38, 150, 50), relative=0)
+    if settings.INSTAGRAM_URL:
+        c.drawString(180, 42, "Instagram")
+        c.linkURL(settings.INSTAGRAM_URL, (180, 38, 290, 50), relative=0)
+    if settings.LINE_OFFICIAL_URL:
+        c.drawString(320, 42, "LINE Official")
+        c.linkURL(settings.LINE_OFFICIAL_URL, (320, 38, 420, 50), relative=0)
     
     # Draw small bottom right QR code
     c.setFont(FONT_REGULAR, 5.5)
@@ -383,11 +401,6 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawImage(qr_reader, width - 70, 32, width=30, height=30)
     c.restoreState()
     
-    # Draw small bottom right QR code
-    c.setFont(FONT_REGULAR, 5.5)
-    c.drawRightString(width - 80, 42, "SCAN TO VERIFY")
-    c.drawImage(qr_reader, width - 70, 32, width=30, height=30)
-    c.restoreState()
     
     # 9. Watermark overlay if revoked
     if certificate.cert_status == 'revoked':
@@ -490,6 +503,7 @@ def generate_daily_report_pdf(stats, date_str) -> BytesIO:
         ("Credit Card", stats.get("revenue_card", 0.00)),
         ("PromptPay QR", stats.get("revenue_promptpay", 0.00)),
         ("Member Credit", stats.get("revenue_member", 0.00)),
+        ("Refunds Paid Out", -stats.get("refunds", 0.00)),
     ]
     
     c.saveState()
@@ -507,7 +521,7 @@ def generate_daily_report_pdf(stats, date_str) -> BytesIO:
     total_rev = stats.get("total_revenue", 0.00)
     c.setFont(FONT_BOLD, 11)
     c.setFillColorRGB(0.0, 0.0, 0.0)
-    c.drawString(50, y, "Total Revenue")
+    c.drawString(50, y, "Net Service Payments")
     c.drawRightString(width - 55, y, f"THB {total_rev:,.2f}")
     c.setStrokeColorRGB(0.1, 0.1, 0.1)
     c.setLineWidth(1)

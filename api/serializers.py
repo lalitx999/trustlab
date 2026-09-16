@@ -113,6 +113,7 @@ class BookingPhotoSerializer(serializers.ModelSerializer):
 
 
 class BookingSerializer(serializers.ModelSerializer):
+    inspection_result = serializers.CharField(source='job.result', read_only=True, default=None)
     photos = BookingPhotoSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
@@ -139,6 +140,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'customer_discount_percent', 'member_badge',
             'branch', 'branch_name', 'booking_date', 'booking_time', 'time_slot',
             'service_type', 'service_name', 'status', 'photos', 'created_at',
+            'service_package', 'price_snapshot', 'payment_status', 'payment_method', 'inspection_result',
             'category', 'brand_name', 'brand', 'model', 'note', 'photo_count',
             # Return shipping
             'delivery_method', 'shipping_fee',
@@ -207,6 +209,8 @@ class BookingSerializer(serializers.ModelSerializer):
         return "10:30:00"
 
     def get_service_type(self, obj):
+        if obj.service_package:
+            return obj.service_package
         if not obj.service_type:
             return 'authentication'
         name = obj.service_type.service_name.lower()
@@ -237,6 +241,7 @@ class JobSerializer(serializers.ModelSerializer):
             'serial_number', 'accessories', 'notes', 'expert_instruction',
             'status', 'result', 'queue_no', 'payment_method', 'payment_status',
             'price', 'express_service', 'created_at', 'updated_at',
+            'service_package', 'price_snapshot', 'vat_amount', 'tag_code', 'shipping_status', 'tracking_number', 'expert_source',
             'certificate_id', 'cert_status', 'photos', 'branch_name', 'expert_name'
         ]
         read_only_fields = ['id', 'queue_no', 'created_at', 'updated_at']
@@ -283,6 +288,7 @@ class JobSerializer(serializers.ModelSerializer):
 
 class CertificateSerializer(serializers.ModelSerializer):
     certificate_id = serializers.CharField(source='cert_code', read_only=True)
+    cert_status = serializers.SerializerMethodField()
     brand_name = serializers.CharField(source='job.brand', read_only=True)
     model = serializers.CharField(source='job.model', read_only=True)
     category_name = serializers.CharField(source='job.category', read_only=True)
@@ -323,9 +329,19 @@ class CertificateSerializer(serializers.ModelSerializer):
         return mapping.get(obj.job.category, 5)
 
     def get_issue_date(self, obj):
-        return obj.created_at.date().isoformat() if obj.created_at else None
+        from django.utils import timezone
+        return timezone.localtime(obj.created_at).date().isoformat() if obj.created_at else None
+
+    def get_cert_status(self, obj):
+        from django.utils import timezone
+        if obj.cert_status == 'authentic' and obj.expires_at and timezone.now() >= obj.expires_at:
+            return 'expired'
+        return obj.cert_status
 
     def get_expire_date(self, obj):
+        if obj.expires_at:
+            from django.utils import timezone
+            return timezone.localtime(obj.expires_at).date().isoformat()
         if obj.expired_at:
             return obj.expired_at.date().isoformat()
         if obj.created_at:

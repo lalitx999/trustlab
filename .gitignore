@@ -18,3 +18,5 @@ media/
 
 # OS Files
 .DS_Store
+
+!.env.example

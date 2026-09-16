@@ -6,6 +6,7 @@ from django.http import HttpResponse, FileResponse
 from django.db.models import Q
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
@@ -101,7 +102,7 @@ def auth_login(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
         
-    if not user.check_password(password):
+    if not user.is_active or not user.check_password(password):
         return Response(
             {"error": "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"},
             status=status.HTTP_401_UNAUTHORIZED
@@ -126,8 +127,8 @@ class JobListCreateView(APIView):
     def get_permissions(self):
         if self.request.method == 'POST':
             # Next.js walk-in can be created, let's keep IsAuthenticated for both back-office access
-            return [IsAuthenticated()]
-        return [IsAuthenticated()]
+            return [IsStaff()]
+        return [IsStaff()]
 
     def get(self, request):
         """Lists jobs. Can filter by status (e.g. in_progress, completed)"""
@@ -139,157 +140,11 @@ class JobListCreateView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        """
-        Creates a new inspection job (walk-in).
-        Supports flat JSON payload from walk-in form.
-        """
-        customer_id = request.data.get('customer_id')
-        branch_id = request.data.get('branch_id')
-        booking_id = request.data.get('booking_id')
-        product_category_id = request.data.get('product_category_id') # 1: Bag, 2: Watch, 3: Accessories, 4: Shoes, 5: Clothes
-        brand_id = request.data.get('brand_id')
-        model = request.data.get('model', '-')
-        color = request.data.get('color', '-')
-        serial_number = request.data.get('serial_number')
-        accessories = request.data.get('accessories', '')
-        note = request.data.get('note', '')
-        total_amount = request.data.get('total_amount', 0.00)
-        payment_method = request.data.get('payment_method', 'cash')
-        payment_status = request.data.get('payment_status', 'unpaid')
-        service_code = request.data.get('service_code') # 'auth_only', 'auth_cert', 'cert_addon', 'credit_topup'
-
-        # 1. Fetch Customer
-        customer = get_object_or_404(Customer, pk=customer_id)
-
-        # Deduct credit balance if payment method is credit_balance
-        if payment_method == 'credit_balance':
-            import decimal
-            try:
-                charge_amount = decimal.Decimal(str(total_amount))
-            except (ValueError, TypeError, decimal.InvalidOperation):
-                charge_amount = decimal.Decimal('0.00')
-
-            if customer.credit_balance < charge_amount:
-                return Response({"error": "ยอดเครดิตสะสมไม่เพียงพอ"}, status=status.HTTP_400_BAD_REQUEST)
-            customer.credit_balance -= charge_amount
-            customer.save()
-            payment_status = 'paid'
-
-        # 2. Fetch Branch
-        branch = Branch.objects.filter(id=branch_id).first()
-        if not branch:
-            branch = Branch.objects.first()
-
-        # 3. Resolve Category name
-        cat_map = {
-            1: 'Bag',
-            2: 'Watch',
-            3: 'Accessories',
-            4: 'Shoes',
-            5: 'Clothes'
-        }
-        category = cat_map.get(product_category_id, 'Bag')
-
-        # 4. Resolve Brand name
-        brand_obj = Brand.objects.filter(id=brand_id).first()
-        brand_name = brand_obj.brand_name if brand_obj else 'Unknown'
-
-        # 5. Compute dynamic daily queue number (e.g., A001, A002)
-        today = datetime.date.today()
-        jobs_today_count = Job.objects.filter(created_at__date=today).count()
-        queue_no = f"A{jobs_today_count + 1:03d}"
-
-        # 6. Resolve booking or create one for photos association
-        booking = None
-        if booking_id:
-            booking = Booking.objects.filter(id=resolve_booking_pk(booking_id)).first()
-            # If this booking already has a job (OneToOneField), detach it
-            # so we can create a new job without IntegrityError
-            if booking and hasattr(booking, 'job'):
-                booking = None  # Don't link this booking to avoid unique constraint clash
-
-        if not booking and (request.data.get('photos_staff') or request.data.get('photos_customer')):
-            svc_pkg_name = 'Authentication' if service_code == 'auth_only' else 'Authentication + Certificate'
-            service_type = ServiceType.objects.filter(service_name__icontains=svc_pkg_name).first() or ServiceType.objects.first()
-            
-            booking = Booking.objects.create(
-                customer=customer,
-                branch=branch,
-                booking_date=today,
-                booking_time=datetime.datetime.now().time(),
-                service_type=service_type,
-                status='completed'
-            )
-
-        # 7. Create Job record
-        tag_code = request.data.get('tag_code', '')
-        job = Job.objects.create(
-            booking=booking,
-            customer=customer,
-            category=category,
-            brand=brand_name,
-            model=model,
-            color=color,
-            material=request.data.get('material', ''),
-            serial_number=serial_number or '',
-            accessories=accessories,
-            notes=note,
-            queue_no=queue_no,
-            payment_method=payment_method,
-            payment_status=payment_status,
-            price=total_amount,
-            express_service=request.data.get('express_service', False)
-        )
-
-        # 8. Decode base64 staff/customer photos and save to BookingPhoto
-        photos_staff = request.data.get('photos_staff', [])
-        photos_customer = request.data.get('photos_customer', [])
-        
-        from .serializers import Base64ImageField
-        if booking:
-            for photo_b64 in photos_staff:
-                try:
-                    field = Base64ImageField()
-                    clean_img = field.to_internal_value(photo_b64)
-                    BookingPhoto.objects.create(booking=booking, photo=clean_img, photo_type='staff')
-                except Exception as e:
-                    print(f"⚠️ Error saving staff photo: {e}")
-                    
-            for photo_b64 in photos_customer:
-                try:
-                    field = Base64ImageField()
-                    clean_img = field.to_internal_value(photo_b64)
-                    BookingPhoto.objects.create(booking=booking, photo=clean_img, photo_type='customer')
-                except Exception as e:
-                    print(f"⚠️ Error saving customer photo: {e}")
-
-        # 9. Handle automatic certificate issue if service code includes certificate
-        if service_code in ('auth_cert', 'cert_addon'):
-            generated_code = tag_code or f"TL-{datetime.date.today().strftime('%Y%m')}-{job.id:04d}"
-            Certificate.objects.get_or_create(
-                job=job,
-                defaults={'cert_status': 'authentic', 'cert_code': generated_code}
-            )
-
-        # Trigger WeChat Work group notification for new walk-in queue
-        msg = (
-            f"### 📢 มีคิว Walk-in ใหม่เข้ามาครับ!\n"
-            f"- **คิวที่ / Queue No:** `{job.queue_no}`\n"
-            f"- **สินค้า / Product:** {job.brand} / {job.model}\n"
-            f"- **ชำระเงิน / Payment:** `{job.payment_method}` ({job.payment_status})\n"
-            f"- **ผู้จอง / Customer:** {job.customer.full_name}"
-        )
-        send_wechat_group_notification(msg)
-
-        return Response({
-            "status": "success",
-            "job_id": job.id,
-            "queue_no": job.queue_no
-        }, status=status.HTTP_201_CREATED)
+        return Response({'error': 'กรุณาสร้าง Booking พร้อมราคายืนยัน แล้วรับงานผ่าน bookings/<id>/check-in'}, status=409)
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def customer_create(request):
     """Creates a new customer. Matches frontend expectations in walk-in/page.tsx"""
     full_name = request.data.get('full_name')
@@ -326,62 +181,16 @@ def customer_create(request):
     }, status=status.HTTP_201_CREATED)
 
 
-class JobDetailView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def put(self, request, pk):
-        """Updates job status (pending -> in_progress -> completed) and sets result"""
-        job = get_object_or_404(Job, pk=resolve_job_pk(pk))
-        
-        status_val = request.data.get('status')
-        result_val = request.data.get('result')
-        payment_status_val = request.data.get('payment_status')
-        
-        if status_val:
-            job.status = status_val
-        if result_val:
-            job.result = result_val
-            # Automatically create a certificate if status is completed and result is authentic
-            if result_val == 'authentic' and not hasattr(job, 'certificate'):
-                cert_code = f"TL-{datetime.date.today().strftime('%Y%m')}-{job.id:04d}"
-                Certificate.objects.get_or_create(
-                    job=job,
-                    defaults={'cert_status': 'authentic', 'cert_code': cert_code}
-                )
-                
-        if payment_status_val:
-            job.payment_status = payment_status_val
-            
-        job.save()
-        return Response(JobSerializer(job).data, status=status.HTTP_200_OK)
 
 
 # ============================================================
 # 3. ใบรับรองสินค้า (Certificates) & ตรวจสาธารณะ (Verify)
 # ============================================================
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def create_certificate(request):
-    """Issues certificate for a job manually"""
-    job_id = request.data.get('job_id')
-    custom_cert_id = request.data.get('certificate_id')
-    job = get_object_or_404(Job, pk=job_id)
-    
-    cert_code = custom_cert_id or f"TL-{datetime.date.today().strftime('%Y%m')}-{job.id:04d}"
-    cert, created = Certificate.objects.get_or_create(
-        job=job,
-        defaults={'cert_status': 'authentic', 'cert_code': cert_code}
-    )
-    if not created and custom_cert_id:
-        cert.cert_code = custom_cert_id
-        cert.save()
-        
-    return Response(CertificateSerializer(cert).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def certificate_detail(request, pk):
     """Retrieves specific certificate details by id or cert_code"""
     cert = resolve_certificate(pk)
@@ -389,7 +198,7 @@ def certificate_detail(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsInspector])
 def certificate_photos_update(request, pk):
     """Saves selected photo arrangement/ids for a certificate"""
     cert = resolve_certificate(pk)
@@ -403,7 +212,7 @@ def certificate_photos_update(request, pk):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def certificate_send_logs(request, pk):
     """Fetches line/email transmission logs for a certificate"""
     cert = resolve_certificate(pk)
@@ -432,7 +241,8 @@ def send_line_flex_message(recipient_line_id, cert):
     elif cert.cert_status == 'expired':
         status_color = "#F59E0B" # Orange
 
-    verify_url = f"https://trustlabthailand.com/verify/{cert.cert_code}"
+    from django.conf import settings
+    verify_url = f"{settings.PUBLIC_SITE_URL}/verify?id={cert.cert_code}"
     
     flex_contents = {
         "type": "bubble",
@@ -582,7 +392,7 @@ def send_line_flex_message(recipient_line_id, cert):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def certificate_send(request, pk):
     """Simulates sending the certificate to client via LINE / Email and logs it"""
     cert = resolve_certificate(pk)
@@ -603,7 +413,7 @@ def certificate_send(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdministrator])
 def certificate_revoke(request, pk):
     """Revokes a certificate with reason"""
     cert = resolve_certificate(pk)
@@ -615,12 +425,13 @@ def certificate_revoke(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAdministrator])
 def certificate_expire(request, pk):
     """Marks a certificate as expired"""
     cert = resolve_certificate(pk)
     cert.cert_status = 'expired'
-    cert.expired_at = datetime.datetime.now()
+    from django.utils import timezone
+    cert.expired_at = timezone.now()
     cert.save()
     return Response(CertificateSerializer(cert).data, status=status.HTTP_200_OK)
 
@@ -630,6 +441,8 @@ def certificate_expire(request, pk):
 def certificate_pdf_view(request, pk):
     """Serves ReportLab generated PDF certificate dynamically"""
     cert = resolve_certificate(pk)
+    if cert.job.service_package == 'photo_review':
+        return Response({'error': 'ไม่พบใบรับรอง'}, status=404)
     pdf_buffer = generate_certificate_pdf(cert)
     response = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
     response['Content-Disposition'] = f'inline; filename="certificate_{pk}.pdf"'
@@ -659,7 +472,7 @@ def public_verify(request, pk):
         except Exception:
             pass
 
-    if not cert:
+    if not cert or cert.job.service_package == 'photo_review':
         return Response(
             {"status": "not_found", "message": "ไม่พบหมายเลขใบรับรองในระบบ"},
             status=status.HTTP_404_NOT_FOUND
@@ -667,7 +480,7 @@ def public_verify(request, pk):
 
     # Return standard verified layout schema
     return Response({
-        "status": cert.cert_status,
+        "status": CertificateSerializer(cert).data["cert_status"],
         "data": CertificateSerializer(cert, context={'request': request}).data
     }, status=status.HTTP_200_OK)
 
@@ -676,195 +489,10 @@ def public_verify(request, pk):
 # 4. การจองคิว (Bookings)
 # ============================================================
 
-class BookingListCreateView(APIView):
-    def get_permissions(self):
-        if self.request.method == 'POST':
-            return [AllowAny()]
-        return [IsAuthenticated()]
-
-    def get(self, request):
-        """Lists all bookings for admin dashboard"""
-        try:
-            bookings = Booking.objects.all().order_by('-booking_date', '-booking_time')
-            return Response(BookingSerializer(bookings, many=True, context={'request': request}).data, status=status.HTTP_200_OK)
-        except Exception as e:
-            print(f"⚠️ Error in BookingListCreateView.get: {e}")
-            return Response([], status=status.HTTP_200_OK)
-
-    def post(self, request):
-        """Creates a booking from public reservation form or admin panel"""
-        # Supports flat payload from public booking form, or fallback nested
-        data = request.data
-        
-        # 1. Resolve customer
-        phone = data.get('phone') or data.get('customer', {}).get('phone_number')
-        customer_name = data.get('customerName') or data.get('customer', {}).get('full_name') or "Online Booker"
-        email = data.get('email') or data.get('customer', {}).get('email')
-        line_id = data.get('lineId') or data.get('customer', {}).get('line_id')
-        
-        raw_phone = phone
-        if phone:
-            phone = "".join(filter(str.isdigit, str(phone)))
-            
-        customer = None
-        if phone:
-            customer = Customer.objects.filter(phone_number__icontains=phone).first() or Customer.objects.filter(phone_number=raw_phone).first()
-            
-        if not customer:
-            membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
-            try:
-                customer = Customer.objects.create(
-                    full_name=customer_name,
-                    phone_number=phone or raw_phone or f"TEMP-B-{uuid.uuid4().hex[:8]}",
-                    email=email,
-                    line_id=line_id,
-                    membership_level=membership
-                )
-            except Exception:
-                customer = Customer.objects.filter(phone_number__icontains=phone).first() if phone else None
-                if not customer:
-                    customer = Customer.objects.first()
-            
-        # 2. Resolve service type
-        service_id = data.get('serviceId') or data.get('booking', {}).get('service_package')
-        # Map frontend service ID string to DB service name
-        svc_pkg_name = 'Authentication'
-        if service_id == 'auth_cert':
-            svc_pkg_name = 'Authentication + Certificate'
-        elif service_id == 'add_on':
-            svc_pkg_name = 'Certificate Add-on'
-            
-        service_type = ServiceType.objects.filter(service_name__icontains=svc_pkg_name).first() or ServiceType.objects.first()
-        
-        # 3. Resolve branch
-        branch_id = data.get('branchId') or data.get('branch_id') or data.get('booking', {}).get('branch_id', 1)
-        if branch_id in [None, 'undefined', 'null', '']:
-            branch_id = 1
-        try:
-            branch_id = int(branch_id)
-        except Exception:
-            branch_id = 1
-        branch = Branch.objects.filter(id=branch_id).first()
-        if not branch:
-            branch = Branch.objects.first()
-            
-        # 4. Resolve date & timeSlot
-        booking_date = data.get('date') or data.get('booking', {}).get('booking_date')
-        if not booking_date or booking_date in ['undefined', 'null', '']:
-            booking_date = datetime.date.today()
-        elif isinstance(booking_date, str):
-            try:
-                # Format: "2026-09-12T00:00:00.000Z" -> "2026-09-12"
-                clean_date_str = booking_date.split('T')[0].strip()
-                booking_date = datetime.datetime.strptime(clean_date_str, '%Y-%m-%d').date()
-            except Exception:
-                booking_date = datetime.date.today()
-            
-        time_slot = data.get('timeSlot') or data.get('booking', {}).get('booking_time') or "10:30"
-        if not time_slot or time_slot in ['undefined', 'null', '']:
-            time_slot = "10:30"
-        booking_time_obj = datetime.time(10, 30) # default fallback
-        if time_slot:
-            try:
-                # e.g., "10:30 - 12:00" or "10:30:00" or "10:30"
-                raw_time = str(time_slot).split('-')[0].strip()
-                parts = raw_time.split(':')
-                h = int(parts[0])
-                m = int(parts[1]) if len(parts) > 1 else 0
-                booking_time_obj = datetime.time(h, m)
-            except Exception:
-                pass
-                
-        # Determine initial status based on payment method
-        payment_method = data.get('paymentMethod') or data.get('payment_method')
-        initial_status = 'pending'
-        if payment_method in ['wallet', 'promptpay', 'card', 'credit_card']:
-            initial_status = 'confirmed'
-
-        # Resolve category
-        raw_cat = str(data.get('category') or data.get('product_category') or 'BAG').strip().upper()
-        cat_map = {'B': 'BAG', 'BAG': 'BAG', 'C': 'CLOTHES', 'CLOTHES': 'CLOTHES', 'S': 'SHOES', 'SHOE': 'SHOES', 'SHOES': 'SHOES', 'A': 'ACCESSORIES', 'ACCESSORIES': 'ACCESSORIES', 'JEWELRY': 'ACCESSORIES', 'W': 'WATCH', 'WATCH': 'WATCH'}
-        category_val = cat_map.get(raw_cat, 'BAG')
-
-        booking_kwargs = {
-            'customer': customer,
-            'branch': branch,
-            'booking_date': booking_date,
-            'booking_time': booking_time_obj,
-            'service_type': service_type,
-            'brand_name': data.get('brand') or '',
-            'model': data.get('model') or '',
-            'note': data.get('description') or '',
-            'status': initial_status
-        }
-        if hasattr(Booking, 'category'):
-            booking_kwargs['category'] = category_val
-
-        # 5. Create Booking
-        booking = Booking.objects.create(**booking_kwargs)
-
-        # Deduct wallet credit if payment method is wallet
-        if payment_method == 'wallet':
-            cost = 1500.00
-            if "Authentication + Certificate" in service_type.service_name:
-                cost = 3500.00
-            elif "Certificate Add-on" in service_type.service_name or "Certificate Only" in service_type.service_name:
-                cost = 2000.00
-            if customer.membership_level:
-                disc = float(customer.membership_level.discount_pct or 0.00)
-                cost = cost * (100 - disc) / 100
-                
-            import decimal
-            cost_decimal = decimal.Decimal(str(cost))
-            if customer.credit_balance < cost_decimal:
-                # Clean up booking if wallet is insufficient
-                booking.delete()
-                return Response({"error": "ยอดเครดิตสะสมไม่เพียงพอ"}, status=400)
-            
-            customer.credit_balance -= cost_decimal
-            customer.save()
-        
-        # 6. Parse base64 photos
-        photos_data = data.get('photos', [])
-        from .serializers import Base64ImageField
-        for photo_b64 in photos_data:
-            try:
-                field = Base64ImageField()
-                clean_img = field.to_internal_value(photo_b64)
-                BookingPhoto.objects.create(booking=booking, photo=clean_img, photo_type='customer')
-            except Exception as e:
-                print(f"⚠️ Error saving booking photo: {e}")
-                
-        # Parse payment slip if provided
-        slip_b64 = data.get('slip_base64')
-        if slip_b64:
-            try:
-                field = Base64ImageField()
-                clean_img = field.to_internal_value(slip_b64)
-                BookingPhoto.objects.create(booking=booking, photo=clean_img, photo_type='slip')
-            except Exception as e:
-                print(f"⚠️ Error saving booking payment slip: {e}")
-                
-        # Trigger WeChat Work group notification for new online booking
-        msg = (
-            f"### 📅 มีการจองคิวออนไลน์ใหม่!\n"
-            f"- **ผู้จอง / Customer:** {booking.customer.full_name} ({booking.customer.phone_number})\n"
-            f"- **สินค้า / Product:** {booking.brand_name} / {booking.model}\n"
-            f"- **สาขา / Branch:** {booking.branch.name}\n"
-            f"- **วันเวลา / Date & Time:** `{booking.booking_date} {booking.booking_time.strftime('%H:%M')}`\n"
-            f"- **สถานะ / Status:** `{booking.status}`"
-        )
-        send_wechat_group_notification(msg)
-
-        return Response({
-            "booking_id": booking.id,
-            "bookingId": booking.id,
-            "status": "success"
-        }, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def bookings_today(request):
     """Lists bookings for today (useful for staff checking camera scans)"""
     today = datetime.date.today()
@@ -873,32 +501,10 @@ def bookings_today(request):
 
 
 
-@api_view(['PUT'])
-@permission_classes([IsAuthenticated])
-def booking_cancel(request, pk):
-    """Cancel a booking — records cancel_reason and cancelled_by"""
-    pk = resolve_booking_pk(pk)
-    booking = get_object_or_404(Booking, pk=pk)
-
-    if booking.status in ('completed', 'cancelled'):
-        return Response({'error': f'ไม่สามารถยกเลิก Booking ที่มีสถานะ {booking.status} ได้'}, status=status.HTTP_400_BAD_REQUEST)
-
-    cancel_reason = request.data.get('cancel_reason', '').strip()
-    if not cancel_reason:
-        return Response({'error': 'กรุณาระบุเหตุผลการยกเลิก'}, status=status.HTTP_400_BAD_REQUEST)
-
-    from django.utils import timezone
-    booking.status = 'cancelled'
-    booking.cancel_reason = cancel_reason
-    booking.cancelled_by = request.user
-    booking.cancelled_at = timezone.now()
-    booking.save()
-
-    return Response({'message': 'ยกเลิก Booking เรียบร้อยแล้ว', 'booking_id': booking.id, 'status': 'cancelled'}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def booking_detail(request, pk):
     """Retrieves specific booking details"""
     pk = resolve_booking_pk(pk)
@@ -907,7 +513,7 @@ def booking_detail(request, pk):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def booking_photos(request, pk):
     """GET details of uploaded photos or POST base64 uploads from camera scanner app"""
     pk = resolve_booking_pk(pk)
@@ -944,7 +550,7 @@ def booking_photos(request, pk):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def job_photos(request, pk):
     """GET flat list of job photos, or POST base64 uploads from camera scanner app / certificate manager"""
     job = get_object_or_404(Job, pk=resolve_job_pk(pk))
@@ -994,7 +600,7 @@ def job_photos(request, pk):
 # ============================================================
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def customers_search(request):
     """Searches customers by phone number or name"""
     q = request.query_params.get('q', '')
@@ -1012,31 +618,15 @@ def customers_search(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def public_customer_lookup(request):
-    """Public customer lookup to pull member discounts before online booking"""
-    phone = request.query_params.get('phone', '')
-    if not phone:
-        return Response({"found": False}, status=status.HTTP_200_OK)
-        
-    clean_phone = "".join(filter(str.isdigit, str(phone)))
-    customer = Customer.objects.filter(phone_number__icontains=clean_phone).first() if clean_phone else None
+    customer = Customer.objects.filter(user=request.user).first() if request.user.is_authenticated else None
     if not customer:
-        customer = Customer.objects.filter(phone_number=phone).first()
-        
-    if customer:
-        disc = customer.membership_level.discount_pct if customer.membership_level else 0.00
-        lvl = customer.membership_level.level_name if customer.membership_level else "General"
-        return Response({
-            "found": True,
-            "membership_tier": lvl,
-            "discount_percent": disc,
-            "customer": CustomerSerializer(customer).data
-        }, status=status.HTTP_200_OK)
-        
-    return Response({"found": False}, status=status.HTTP_200_OK)
+        return Response({'found': False})
+    return Response({'found': True, 'customer': CustomerSerializer(customer).data,
+                     'membership_tier': customer.membership_level.level_name if customer.membership_level else 'general'})
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def members_list(request):
     """Lists customers with active membership details"""
     customers = Customer.objects.exclude(membership_level=None).order_by('-credit_balance')
@@ -1045,25 +635,6 @@ def members_list(request):
     return Response(CustomerSerializer(customers, many=True).data, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def members_credit(request):
-    """Adds/Deducts credits to a customer balance"""
-    customer_id = request.data.get('customer_id')
-    amount = float(request.data.get('amount', 0))
-    action_type = request.data.get('type') # 'add' or 'deduct'
-    
-    customer = get_object_or_404(Customer, pk=customer_id)
-    val = decimal.Decimal(str(amount))
-    if action_type == 'add':
-        customer.credit_balance += val
-    elif action_type == 'deduct':
-        if customer.credit_balance < val:
-            return Response({"error": "ยอดเครดิตสะสมไม่เพียงพอ"}, status=status.HTTP_400_BAD_REQUEST)
-        customer.credit_balance -= val
-        
-    customer.save()
-    return Response(CustomerSerializer(customer).data, status=status.HTTP_200_OK)
 
 
 # ============================================================
@@ -1071,7 +642,7 @@ def members_credit(request):
 # ============================================================
 
 class ServiceTypeListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get(self, request):
         services = ServiceType.objects.all().order_by('id')
@@ -1086,7 +657,7 @@ class ServiceTypeListCreateView(APIView):
 
 
 class ServiceTypeDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get_object(self, pk):
         return get_object_or_404(ServiceType, pk=pk)
@@ -1114,7 +685,7 @@ class BrandListCreateView(APIView):
     def get_permissions(self):
         if self.request.method == 'GET':
             return [AllowAny()]
-        return [IsAuthenticated()]
+        return [IsStaff()]
 
     def get(self, request):
         brands = Brand.objects.all().order_by('brand_name')
@@ -1129,7 +700,7 @@ class BrandListCreateView(APIView):
 
 
 class BrandDeleteView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def delete(self, request, pk):
         brand = get_object_or_404(Brand, pk=pk)
@@ -1200,7 +771,11 @@ def public_qrcode_view(request):
     if not payload:
         amount = float(amount_param) if amount_param else 0.00
         # Generate default merchant PromptPay payload using company Tax ID
-        payload = generate_promptpay_payload("0105562000000", amount)
+        from .workflows import qr_image
+        from django.conf import settings
+        from .commerce import money
+        qr_image(money(amount))  # Validate configured recipient and amount first.
+        payload = generate_promptpay_payload(settings.PROMPTPAY_RECEIVER_ID, money(amount))
         
     qr_buffer = generate_qr_code_image(payload)
     return HttpResponse(qr_buffer.read(), content_type='image/png')
@@ -1227,158 +802,14 @@ class PublicPartnerSubmitView(APIView):
 
 
 # Placeholder for reports
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def reports_daily_summary(request):
-    """Daily revenue metrics summary matching reports page schema"""
-    today = datetime.date.today()
-    total_jobs = Job.objects.filter(created_at__date=today).count()
-    completed_jobs = Job.objects.filter(created_at__date=today, status='completed').count()
-    authentic_jobs = Job.objects.filter(created_at__date=today, result='authentic').count()
-    fake_jobs = Job.objects.filter(created_at__date=today, result='fake').count()
-    
-    return Response({
-        "date": today.strftime('%d/%m/%Y'),
-        "stats": {
-            "total_jobs": total_jobs,
-            "completed_jobs": completed_jobs,
-            "authentic_jobs": authentic_jobs,
-            "fake_jobs": fake_jobs
-        }
-    }, status=status.HTTP_200_OK)
+
+
+
+
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def reports_daily_summary_pdf(request):
-    """Generates and returns the daily revenue & performance PDF report"""
-    today = datetime.date.today()
-    jobs_today = Job.objects.filter(created_at__date=today)
-    
-    total_jobs = jobs_today.count()
-    completed_jobs = jobs_today.filter(status='completed').count()
-    authentic_jobs = jobs_today.filter(result='authentic').count()
-    fake_jobs = jobs_today.filter(result='fake').count()
-    inconclusive_jobs = jobs_today.filter(result='inconclusive').count()
-    
-    # Calculate revenue
-    import decimal
-    revenue_cash = decimal.Decimal('0.00')
-    revenue_transfer = decimal.Decimal('0.00')
-    revenue_card = decimal.Decimal('0.00')
-    revenue_promptpay = decimal.Decimal('0.00')
-    revenue_member = decimal.Decimal('0.00')
-    
-    for j in jobs_today:
-        p = j.price or decimal.Decimal('0.00')
-        if j.payment_method == 'cash':
-            revenue_cash += p
-        elif j.payment_method == 'transfer':
-            revenue_transfer += p
-        elif j.payment_method == 'credit_card':
-            revenue_card += p
-        elif j.payment_method == 'promptpay':
-            revenue_promptpay += p
-        elif j.payment_method == 'credit_balance':
-            revenue_member += p
-            
-    total_revenue = revenue_cash + revenue_transfer + revenue_card + revenue_promptpay + revenue_member
-    
-    stats = {
-        "total_jobs": total_jobs,
-        "completed_jobs": completed_jobs,
-        "authentic_jobs": authentic_jobs,
-        "fake_jobs": fake_jobs,
-        "inconclusive_jobs": inconclusive_jobs,
-        "revenue_cash": float(revenue_cash),
-        "revenue_transfer": float(revenue_transfer),
-        "revenue_card": float(revenue_card),
-        "revenue_promptpay": float(revenue_promptpay),
-        "revenue_member": float(revenue_member),
-        "total_revenue": float(total_revenue)
-    }
-    
-    from .pdf_generator import generate_daily_report_pdf
-    pdf_buffer = generate_daily_report_pdf(stats, today.strftime('%d/%m/%Y'))
-    
-    from django.http import HttpResponse
-    response = HttpResponse(pdf_buffer.getvalue(), content_type='application/pdf')
-    filename = f"daily_report_{today.strftime('%Y%m%d')}.pdf"
-    response['Content-Disposition'] = f'inline; filename="{filename}"'
-    return response
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def members_transactions(request):
-    """
-    Returns transaction logs by combining Job payments and Wallet bookings history.
-    """
-    tx_list = []
-    
-    # 1. Fetch paid jobs
-    jobs = Job.objects.filter(payment_status='paid').order_by('-created_at')[:30]
-    for j in jobs:
-        tx_list.append({
-            "transaction_id": f"TX-J-{j.id}",
-            "full_name": j.customer.full_name,
-            "phone": j.customer.phone_number,
-            "description": f"ชำระค่าบริการ {j.brand} {j.model} (Walk-in/POS)",
-            "amount": float(j.price),
-            "type": "deduct",
-            "created_at_dt": j.created_at,
-            "created_at": j.created_at.strftime('%d/%m/%Y %H:%M')
-        })
-        
-    # 2. Fetch confirmed wallet bookings (online)
-    bookings = Booking.objects.filter(status='confirmed').order_by('-created_at')[:30]
-    for b in bookings:
-        cost = 1500.00
-        if "Authentication + Certificate" in b.service_type.service_name:
-            cost = 3500.00
-        elif "Certificate Add-on" in b.service_type.service_name or "Certificate Only" in b.service_type.service_name:
-            cost = 2000.00
-        if b.customer.membership_level:
-            disc = float(b.customer.membership_level.discount_pct or 0.00)
-            cost = cost * (100 - disc) / 100
-        tx_list.append({
-            "transaction_id": f"TX-B-{b.id}",
-            "full_name": b.customer.full_name,
-            "phone": b.customer.phone_number,
-            "description": f"ชำระค่าบริการ {b.brand_name} {b.model} (จองออนไลน์)",
-            "amount": float(cost),
-            "type": "deduct",
-            "created_at_dt": b.created_at,
-            "created_at": b.created_at.strftime('%d/%m/%Y %H:%M')
-        })
-
-    # 3. Fetch approved topup requests
-    from .models import TopupRequest
-    topups = TopupRequest.objects.filter(status='approved').order_by('-created_at')[:30]
-    for t in topups:
-        tx_list.append({
-            "transaction_id": f"TX-T-{t.id}",
-            "full_name": t.customer.full_name,
-            "phone": t.customer.phone_number,
-            "description": f"เติมเครดิตเข้าระบบ ({t.payment_method})",
-            "amount": float(t.amount),
-            "type": "topup",
-            "created_at_dt": t.created_at,
-            "created_at": t.created_at.strftime('%d/%m/%Y %H:%M')
-        })
-        
-    # Sort transactions by datetime descending
-    tx_list.sort(key=lambda x: x["created_at_dt"], reverse=True)
-    
-    # Remove temporary datetime object from response
-    for tx in tx_list:
-        tx.pop("created_at_dt", None)
-        
-    return Response(tx_list, status=status.HTTP_200_OK)
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def contacts_list(request):
     """Lists submitted contact messages for staff"""
     contacts = Contact.objects.all().order_by('-created_at')
@@ -1386,7 +817,7 @@ def contacts_list(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def partners_list(request):
     """Lists submitted partner proposals for staff"""
     partners = Partner.objects.all().order_by('-created_at')
@@ -1394,7 +825,7 @@ def partners_list(request):
 
 
 @api_view(['PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def contact_detail(request, pk):
     """Updates status or deletes a contact message"""
     contact = get_object_or_404(Contact, pk=pk)
@@ -1409,7 +840,7 @@ def contact_detail(request, pk):
 
 
 @api_view(['PUT', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsStaff])
 def partner_detail(request, pk):
     """Updates status or deletes a partner request"""
     partner = get_object_or_404(Partner, pk=pk)
@@ -1430,7 +861,7 @@ def partner_detail(request, pk):
 # ============================================================
 
 class UserListCreateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get(self, request):
         users = StaffUser.objects.all().order_by('id')
@@ -1446,7 +877,7 @@ class UserListCreateView(APIView):
 
 
 class UserDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdministrator]
 
     def get_object(self, pk):
         return get_object_or_404(StaffUser, pk=pk)
@@ -1475,12 +906,8 @@ class UserDetailView(APIView):
 @permission_classes([AllowAny])
 def branches_list(request):
     """Lists all service branches"""
-    branches = Branch.objects.all().order_by('id')
-    if not branches.exists():
-        Branch.objects.create(id=1, name="BKK - Siam Square One")
-        Branch.objects.create(id=2, name="BKK - Central Chidlom")
-        branches = Branch.objects.all().order_by('id')
-    
+    branches = Branch.objects.filter(is_active=True).order_by('id')
+
     data = []
     for b in branches:
         name_en = "Siam Square One" if b.id == 1 else ("Central Chidlom" if b.id == 2 else b.name)
@@ -1749,166 +1176,10 @@ def public_invoice_preview(request):
     return HttpResponse(html, content_type='text/html; charset=utf-8')
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def generate_promptpay_qr(request):
-    """
-    Generates a Dynamic PromptPay QR Code base64 image matching order amount.
-    """
-    amount_raw = request.data.get('amount')
-    try:
-        amount = float(amount_raw)
-    except (ValueError, TypeError):
-        return Response({"error": "จำนวนเงินไม่ถูกต้อง"}, status=400)
-
-    # PromptPay Receiver ID (Default to the registered Tax ID or phone number from the quote)
-    receiver_id = "0624980094"
-
-    # Clean target
-    target = "".join(filter(str.isdigit, receiver_id))
-    payload = "000201010212"
-    aid = "A000000677010111"
-
-    if len(target) == 13:
-        merchant_info = f"0016{aid}0213{target}"
-    else:
-        if target.startswith("0"):
-            phone_formatted = "0066" + target[1:]
-        else:
-            phone_formatted = target
-        phone_formatted = phone_formatted.rjust(13, '0')
-        merchant_info = f"0016{aid}0113{phone_formatted}"
-
-    payload += f"29{len(merchant_info):02d}{merchant_info}"
-    payload += "5802TH"
-    payload += "5303764"
-
-    if amount > 0:
-        amount_str = f"{amount:.2f}"
-        payload += f"54{len(amount_str):02d}{amount_str}"
-
-    payload += "6304"
-
-    # Calculate CRC-16 CCITT
-    crc = 0xFFFF
-    for char in payload:
-        crc ^= (ord(char) << 8)
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
-            crc &= 0xFFFF
-
-    final_payload = payload + f"{crc:04X}"
-
-    # Generate QR Code Image
-    import qrcode
-    from io import BytesIO
-    import base64
-
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(final_payload)
-    qr.make(fit=True)
-
-    img = qr.make_image(fill_color="black", back_color="white")
-    img_buffer = BytesIO()
-    img.save(img_buffer, format="PNG")
-    qr_b64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-
-    return Response({
-        "qr_data": final_payload,
-        "qr_image": f"data:image/png;base64,{qr_b64}"
-    }, status=200)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def payments_webhook_promptpay(request):
-    """
-    Receives PromptPay payment webhook confirmation from gateway and marks job as paid.
-    """
-    # Accept either job_id (string code like TL2608-B-0013) or booking_id
-    job_id = request.data.get('job_id')
-    booking_id = request.data.get('booking_id')
-    
-    if not job_id and not booking_id:
-        return Response({"error": "ต้องการ job_id หรือ booking_id"}, status=400)
-
-    job = None
-    if job_id:
-        from .views import resolve_job_pk
-        try:
-            job = Job.objects.filter(id=resolve_job_pk(job_id)).first()
-        except Exception:
-            pass
-    elif booking_id:
-        from .views import resolve_booking_pk
-        try:
-            job = Job.objects.filter(booking_id=resolve_booking_pk(booking_id)).first()
-        except Exception:
-            pass
-
-    if not job:
-        return Response({"error": "ไม่พบใบงานที่สอดคล้อง"}, status=404)
-
-    job.payment_status = 'paid'
-    job.save()
-
-    return Response({"status": "success", "message": "อัปเดตสถานะการชำระเงินสำเร็จ"}, status=200)
 
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def payments_charge(request):
-    """
-    Simulates / processes Credit Card charging via payment gateway token.
-    """
-    token = request.data.get('token')
-    amount_raw = request.data.get('amount')
-    job_id = request.data.get('job_id')
-    booking_id = request.data.get('booking_id')
-    
-    if not token:
-        return Response({"error": "ต้องการ token บัตรเครดิต"}, status=400)
-    try:
-        amount = float(amount_raw)
-    except (ValueError, TypeError):
-        return Response({"error": "จำนวนเงินไม่ถูกต้อง"}, status=400)
-
-    # Resolve job
-    job = None
-    if job_id:
-        from .views import resolve_job_pk
-        try:
-            job = Job.objects.filter(id=resolve_job_pk(job_id)).first()
-        except Exception:
-            pass
-    elif booking_id:
-        from .views import resolve_booking_pk
-        try:
-            job = Job.objects.filter(booking_id=resolve_booking_pk(booking_id)).first()
-        except Exception:
-            pass
-
-    # Process sandbox payment gateway charge simulation
-    if token.startswith("tokn_error"):
-        return Response({"error": "บัตรเครดิตถูกปฏิเสธ (ยอดเงินไม่พอ หรือบัตรหมดอายุ)"}, status=400)
-        
-    if job:
-        job.payment_status = 'paid'
-        job.save()
-
-    return Response({
-        "status": "success",
-        "charge_id": "chrg_test_" + "".join(filter(str.isalnum, token))[:10],
-        "message": "ตัดบัตรเครดิตสำเร็จ"
-    }, status=200)
 
 
 @api_view(['POST'])
@@ -1970,17 +1241,9 @@ def auth_line_login(request):
     if line_user_id:
         staff_user = StaffUser.objects.filter(line_user_id=line_user_id).first()
         
-    # Fallback mock mode: If no user found or API secret not provided,
-    # auto-associate the LINE login request with the first admin staff user
-    if not staff_user:
-        staff_user = StaffUser.objects.filter(role='admin').first() or StaffUser.objects.first()
-        if staff_user and line_user_id:
-            staff_user.line_user_id = line_user_id
-            staff_user.save()
-            
-    if not staff_user:
-        return Response({"error": "ไม่พบพนักงานในระบบหลังบ้าน"}, status=404)
-        
+    if not staff_user or not staff_user.is_active or staff_user.role == 'customer':
+        return Response({'error': 'ไม่พบบัญชีพนักงานที่เชื่อม LINE นี้'}, status=403)
+
     refresh = RefreshToken.for_user(staff_user)
     
     return Response({
@@ -2108,16 +1371,7 @@ def customer_dashboard(request):
     from .models import Customer, Booking
     from .serializers import BookingSerializer
 
-    try:
-        customer = user.customer_profile
-    except Customer.DoesNotExist:
-        # If user is staff/admin but has no customer profile, try finding a Customer by phone match
-        customer = Customer.objects.filter(phone_number=user.phone).first()
-        if customer:
-            customer.user = user
-            customer.save()
-        else:
-            return Response({"error": "บัญชีผู้ใช้นี้ไม่ใช่บัญชีของลูกค้าทั่วไป"}, status=400)
+    customer = get_object_or_404(Customer, user=user)
 
     # Fetch booking history
     bookings = Booking.objects.filter(customer=customer).order_by('-booking_date', '-booking_time')
@@ -2150,12 +1404,7 @@ def customer_profile_update(request):
     user = request.user
     from .models import Customer
 
-    try:
-        customer = user.customer_profile
-    except Customer.DoesNotExist:
-        customer = Customer.objects.filter(phone_number=user.phone).first()
-        if not customer:
-            return Response({"error": "บัญชีผู้ใช้นี้ไม่ใช่บัญชีของลูกค้าทั่วไป"}, status=400)
+    customer = get_object_or_404(Customer, user=user)
 
     full_name = request.data.get('full_name')
     email = request.data.get('email')
@@ -2185,235 +1434,3 @@ def customer_profile_update(request):
             "email": user.email,
         }
     }, status=200)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def customer_topup_initiate(request):
-    """
-    Initiates a top-up request. Generates PromptPay QR base64 image if promptpay is selected.
-    """
-    user = request.user
-    from .models import Customer, TopupRequest
-    
-    try:
-        customer = user.customer_profile
-    except Customer.DoesNotExist:
-        customer = Customer.objects.filter(phone_number=user.phone).first()
-        if not customer:
-            return Response({"error": "บัญชีผู้ใช้นี้ไม่ใช่บัญชีของลูกค้าทั่วไป"}, status=400)
-            
-    amount_raw = request.data.get('amount')
-    payment_method = request.data.get('payment_method', 'promptpay')
-    
-    try:
-        amount = float(amount_raw)
-        if amount < 100:
-            return Response({"error": "ยอดเงินเติมขั้นต่ำคือ 100 บาท"}, status=400)
-    except (ValueError, TypeError):
-        return Response({"error": "จำนวนเงินไม่ถูกต้อง"}, status=400)
-
-    # 1. Create pending TopupRequest
-    topup = TopupRequest.objects.create(
-        customer=customer,
-        amount=amount,
-        payment_method=payment_method,
-        status='pending'
-    )
-
-    qr_image = None
-    if payment_method == 'promptpay':
-        receiver_id = "0624980094"
-        target = "".join(filter(str.isdigit, receiver_id))
-        payload = "000201010212"
-        aid = "A000000677010111"
-        if len(target) == 13:
-            merchant_info = f"0016{aid}0213{target}"
-        else:
-            phone_formatted = ("0066" + target[1:]) if target.startswith("0") else target
-            phone_formatted = phone_formatted.rjust(13, '0')
-            merchant_info = f"0016{aid}0113{phone_formatted}"
-        
-        payload += f"29{len(merchant_info):02d}{merchant_info}"
-        payload += "5802TH"
-        payload += "5303764"
-        if amount > 0:
-            amount_str = f"{amount:.2f}"
-            payload += f"54{len(amount_str):02d}{amount_str}"
-        payload += "6304"
-        
-        # Calculate CRC-16 CCITT
-        crc = 0xFFFF
-        for char in payload:
-            crc ^= (ord(char) << 8)
-            for _ in range(8):
-                if crc & 0x8000:
-                    crc = (crc << 1) ^ 0x1021
-                else:
-                    crc <<= 1
-                crc &= 0xFFFF
-        final_payload = payload + f"{crc:04X}"
-        
-        import qrcode
-        from io import BytesIO
-        import base64
-        qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
-        qr.add_data(final_payload)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        img_buffer = BytesIO()
-        img.save(img_buffer, format="PNG")
-        qr_b64 = base64.b64encode(img_buffer.getvalue()).decode('utf-8')
-        qr_image = f"data:image/png;base64,{qr_b64}"
-
-    return Response({
-        "status": "success",
-        "topup_id": topup.id,
-        "amount": str(topup.amount),
-        "payment_method": topup.payment_method,
-        "qr_image": qr_image
-    }, status=201)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def customer_topup_submit_slip(request):
-    """
-    Submits a payment slip photo for top-up request. Auto-approves and updates customer wallet + tier.
-    """
-    user = request.user
-    topup_id = request.data.get('topup_id')
-    slip_b64 = request.data.get('slip_base64')
-    
-    if not topup_id or not slip_b64:
-        return Response({"error": "กรุณาส่งรหัสรายการเติมเงินและรูปสลิป"}, status=400)
-        
-    from .models import TopupRequest, MembershipLevel
-    from .serializers import Base64ImageField
-    import datetime
-
-    topup = TopupRequest.objects.filter(id=topup_id, customer__user=user).first()
-    if not topup:
-        topup = TopupRequest.objects.filter(id=topup_id, customer__phone_number=user.phone).first()
-        if not topup:
-            return Response({"error": "ไม่พบรายการเติมเงินนี้ในบัญชีของคุณ"}, status=404)
-
-    try:
-        # 1. Parse base64 slip photo
-        field = Base64ImageField()
-        clean_img = field.to_internal_value(slip_b64)
-        topup.slip_photo = clean_img
-        topup.status = 'approved'
-        topup.approved_at = datetime.datetime.now()
-        topup.save()
-
-        # 2. Add credit to customer balance
-        customer = topup.customer
-        import decimal
-        customer.credit_balance += decimal.Decimal(str(topup.amount))
-
-        # 3. Handle Auto-upgrade package tiers criteria
-        amount = float(topup.amount)
-        new_level = None
-        if amount >= 20000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Partner').first()
-        elif amount >= 10000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Gold').first()
-        elif amount >= 3000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Platinum').first()
-
-        if new_level:
-            customer.membership_level = new_level
-        customer.save()
-
-        # 4. Notify staff via WeChat Work Webhook
-        msg = (
-            f"### 🔔 สมาชิกเติมเครดิตสำเร็จ (Auto Approved)\n"
-            f"- **ลูกค้า / Customer:** {customer.full_name} ({customer.phone_number})\n"
-            f"- **ยอดเติม / Top-up Amount:** `฿{amount:,.2f}`\n"
-            f"- **ระดับสมาชิก / Tier Class:** `{customer.membership_level.level_name if customer.membership_level else 'General'}`"
-        )
-        send_wechat_group_notification(msg)
-
-        return Response({
-            "status": "success",
-            "message": "เติมเครดิตและอัปเดตระดับสมาชิกสำเร็จ",
-            "credit_balance": str(customer.credit_balance),
-            "membership_level": customer.membership_level.level_name if customer.membership_level else 'General'
-        }, status=200)
-
-    except Exception as e:
-        return Response({"error": f"เกิดข้อผิดพลาดในการประมวลผลสลิป: {str(e)}"}, status=500)
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def customer_topup_charge_card(request):
-    """
-    Charges credit card token for top-up request. Auto-approves and updates customer wallet + tier.
-    """
-    user = request.user
-    topup_id = request.data.get('topup_id')
-    token = request.data.get('token')
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.warning(f"DEBUG CHARGE PAYLOAD: topup_id={topup_id}, token={token}, data={request.data}")
-    
-    if not topup_id or not token:
-        return Response({"error": "กรุณาส่งรหัสรายการเติมเงินและ token บัตรเครดิต"}, status=400)
-        
-    if token.startswith("tokn_error"):
-        return Response({"error": "บัตรเครดิตถูกปฏิเสธ (ยอดเงินไม่พอ หรือบัตรหมดอายุ)"}, status=400)
-
-    from .models import TopupRequest, MembershipLevel
-    import datetime
-
-    topup = TopupRequest.objects.filter(id=topup_id, customer__user=user).first()
-    if not topup:
-        topup = TopupRequest.objects.filter(id=topup_id, customer__phone_number=user.phone).first()
-        if not topup:
-            return Response({"error": "ไม่พบรายการเติมเงินนี้ในบัญชีของคุณ"}, status=404)
-
-    try:
-        topup.status = 'approved'
-        topup.approved_at = datetime.datetime.now()
-        topup.save()
-
-        # Add credit to customer balance
-        customer = topup.customer
-        import decimal
-        customer.credit_balance += decimal.Decimal(str(topup.amount))
-
-        # Handle Auto-upgrade package tiers criteria
-        amount = float(topup.amount)
-        new_level = None
-        if amount >= 20000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Partner').first()
-        elif amount >= 10000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Gold').first()
-        elif amount >= 3000:
-            new_level = MembershipLevel.objects.filter(level_name__iexact='Platinum').first()
-
-        if new_level:
-            customer.membership_level = new_level
-        customer.save()
-
-        # Notify staff via WeChat Work Webhook
-        msg = (
-            f"### 💳 สมาชิกเติมเครดิตผ่านบัตรเครดิตสำเร็จ\n"
-            f"- **ลูกค้า / Customer:** {customer.full_name} ({customer.phone_number})\n"
-            f"- **ยอดเติม / Top-up Amount:** `฿{amount:,.2f}`\n"
-            f"- **ระดับสมาชิก / Tier Class:** `{customer.membership_level.level_name if customer.membership_level else 'General'}`"
-        )
-        send_wechat_group_notification(msg)
-
-        return Response({
-            "status": "success",
-            "message": "เติมเครดิตด้วยบัตรเครดิตสำเร็จ",
-            "credit_balance": str(customer.credit_balance),
-            "membership_level": customer.membership_level.level_name if customer.membership_level else 'General'
-        }, status=200)
-
-    except Exception as e:
-        return Response({"error": f"เกิดข้อผิดพลาดในการจ่ายเงิน: {str(e)}"}, status=500)
-

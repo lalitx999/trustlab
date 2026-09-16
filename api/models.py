@@ -160,6 +160,13 @@ class Booking(models.Model):
     model = models.CharField(max_length=100, blank=True, default='')
     note = models.TextField(blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    service_package = models.CharField(max_length=20, blank=True, default='')
+    price_snapshot = models.JSONField(default=dict, blank=True)
+    payment_status = models.CharField(max_length=20, default='unpaid')
+    payment_method = models.CharField(max_length=20, blank=True, default='')
+    payment_evidence = models.TextField(blank=True, default='')
+    request_fingerprint = models.CharField(max_length=64, blank=True, default='')
+    request_key = models.UUIDField(null=True, blank=True, unique=True)
     # Return shipping fields
     delivery_method = models.CharField(max_length=20, choices=DELIVERY_METHOD_CHOICES, default='self_pickup')
     shipping_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
@@ -250,6 +257,10 @@ class Job(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     result = models.CharField(max_length=20, choices=RESULT_CHOICES, blank=True, null=True)
     queue_no = models.CharField(max_length=20)
+    price_snapshot = models.JSONField(default=dict, blank=True)
+    tag_code = models.CharField(max_length=100, blank=True, default='')
+    result_recorded_by = models.ForeignKey(StaffUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='recorded_jobs')
+    expert_source = models.CharField(max_length=255, blank=True, default='')
     # Service Package (15-day cert / 90-day cert / photo review)
     service_package = models.CharField(max_length=20, choices=SERVICE_PACKAGE_CHOICES, default='cert_90d')
     payment_method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
@@ -283,6 +294,8 @@ class Certificate(models.Model):
         ('expired', 'Expired'),
     ]
     job = models.OneToOneField(Job, on_delete=models.CASCADE, related_name='certificate')
+    expires_at = models.DateTimeField(null=True, blank=True)
+    validity_days = models.PositiveIntegerField(null=True, blank=True)
     cert_code = models.CharField(max_length=50, unique=True, blank=True, null=True,
                                  help_text="Human-readable certificate reference e.g. TL-N955-HAJW")
     cert_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='authentic')
@@ -356,6 +369,7 @@ class TopupRequest(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     payment_method = models.CharField(max_length=50, default='promptpay') # promptpay, credit_card
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='pending')
+    evidence = models.TextField(blank=True, default='')
     slip_photo = models.ImageField(upload_to='slips/', blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     approved_at = models.DateTimeField(blank=True, null=True)
@@ -367,3 +381,66 @@ class TopupRequest(models.Model):
         db_table = 'topup_requests'
 
 
+
+
+class ServicePackage(models.Model):
+    code = models.CharField(max_length=20, primary_key=True, choices=Job.SERVICE_PACKAGE_CHOICES)
+    name = models.CharField(max_length=100)
+    validity_days = models.PositiveIntegerField(default=0)
+    sort_order = models.PositiveIntegerField(default=0)
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['sort_order']
+
+
+class PackagePrice(models.Model):
+    package = models.ForeignKey(ServicePackage, on_delete=models.PROTECT)
+    category = models.CharField(max_length=20)
+    brand = models.CharField(max_length=100)
+    member_tier = models.CharField(max_length=50, default='general')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['package', 'category', 'brand', 'member_tier'], name='unique_package_rate'),
+                       models.CheckConstraint(condition=models.Q(amount__gte=0), name='package_rate_nonnegative')]
+
+
+class CheckoutPolicy(models.Model):
+    # Explicit approval is required before accepting payments with this policy.
+    approved = models.BooleanField(default=False)
+    prices_include_vat = models.BooleanField(default=True)
+    shipping_taxable = models.BooleanField(default=True)
+    shipping_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class CreditEntry(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.PROTECT, related_name='credit_entries')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
+    reference = models.CharField(max_length=120, unique=True)
+    reason = models.TextField()
+    actor = models.ForeignKey(StaffUser, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class WorkflowEvent(models.Model):
+    booking = models.ForeignKey(Booking, on_delete=models.PROTECT, null=True, blank=True)
+    job = models.ForeignKey(Job, on_delete=models.PROTECT, null=True, blank=True)
+    actor = models.ForeignKey(StaffUser, on_delete=models.PROTECT)
+    action = models.CharField(max_length=50)
+    detail = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class CancellationRequest(models.Model):
+    booking = models.OneToOneField(Booking, on_delete=models.PROTECT)
+    reason = models.TextField()
+    status = models.CharField(max_length=20, default='pending')
+    requested_by = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name='cancellation_requests')
+    reviewed_by = models.ForeignKey(StaffUser, on_delete=models.PROTECT, null=True, blank=True, related_name='cancellation_reviews')
+    refund_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    refund_status = models.CharField(max_length=20, default='not_required')
+    refund_reference = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
