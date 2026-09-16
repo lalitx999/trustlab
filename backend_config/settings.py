@@ -132,7 +132,13 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings (Allow Next.js frontend calls)
-CORS_ALLOWED_ORIGINS = [v.strip() for v in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',') if v.strip()]
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://www.trustlabthailand.com",
+    "https://trustlabthailand.com",
+] + [v.strip() for v in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if v.strip()]
 CORS_ALLOW_CREDENTIALS = True
 
 # Django REST Framework Settings
