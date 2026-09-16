@@ -1,0 +1,20 @@
+# Python Virtual Environment
+venv/
+.venv/
+env/
+
+# Environment Variables & Secrets
+.env
+.env.*
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Static & Media local uploads
+staticfiles/
+media/
+
+# OS Files
+.DS_Store

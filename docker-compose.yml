@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: trust_backend_db
+    restart: always
+    environment:
+      POSTGRES_DB: trustlab_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_secure_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trust_backend_app
+    restart: always
+    command: >
+      sh -c "python manage.py migrate &&
+             gunicorn --bind 0.0.0.0:8000 --workers 3 backend_config.wsgi:application"
+    volumes:
+      - ./media:/app/media
+      - ./staticfiles:/app/staticfiles
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=db
+      - DB_NAME=trustlab_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres_secure_password
+      - DB_PORT=5432
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
