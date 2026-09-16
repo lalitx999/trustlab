@@ -178,14 +178,16 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     
     # Format issue date
     issue_date = certificate.created_at.strftime("%d %B %Y").upper()
+    serial_val = getattr(job, 'serial_number', '') or getattr(certificate, 'serial_number', '') or '-'
     
     # Draw Specifications Table
     start_y = height - 175
-    line_h = 28
+    line_h = 24
     fields = [
         ("CERTIFICATE ID", certificate.cert_code or f"TL-{certificate.id}"),
         ("BRAND", job.brand.upper()),
         ("MODEL", job.model.upper()),
+        ("SERIAL NO.", str(serial_val).upper()),
         ("CATEGORY", cat_friendly.upper()),
         ("INSPECTION DATE", issue_date)
     ]
@@ -195,19 +197,19 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         y = start_y - (idx * line_h)
         
         # Label style
-        c.setFont(FONT_BOLD, 6.5)
+        c.setFont(FONT_BOLD, 6)
         c.setFillColorRGB(0.55, 0.55, 0.55)
         c.drawString(305, y, lbl)
         
         # Value style
-        c.setFont(FONT_BOLD, 9)
+        c.setFont(FONT_BOLD, 8.5)
         c.setFillColorRGB(0.08, 0.08, 0.08)
-        c.drawString(305, y - 11, val)
+        c.drawString(305, y - 9, val)
         
         # Bottom divider line
         c.setStrokeColorRGB(0.92, 0.92, 0.92)
         c.setLineWidth(0.5)
-        c.line(305, y - 15, width - 40, y - 15)
+        c.line(305, y - 12, width - 40, y - 12)
     c.restoreState()
     
     # "VERIFY ONLINE" Block
@@ -222,7 +224,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     
     # Generate Verification QR Code in memory
     qr = qrcode.QRCode(version=1, box_size=5, border=1)
-    verify_url = f"https://trustlab.co.th/verify/{certificate.cert_code or certificate.id}"
+    verify_url = f"https://www.trustlabthailand.com/verify/{certificate.cert_code or certificate.id}"
     qr.add_data(verify_url)
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="black", back_color="white")
@@ -247,7 +249,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawString(410, verify_y + 55, "OR VISIT")
     c.setFont(FONT_BOLD, 7)
     c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(410, verify_y + 46, "trustlab.co.th/verify")
+    c.drawString(410, verify_y + 46, "www.trustlabthailand.com/verify")
     
     # Certificate ID pill (solid black background with white text)
     c.setFillColorRGB(0.08, 0.08, 0.08)
@@ -306,7 +308,22 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     # 7. Validity Cards Section
     cards_y = height - 655
     c.saveState()
-    # Left Card: Valid for 6 Months
+    
+    # Determine validity duration based on job service_package (15 days vs 90 days)
+    pkg = getattr(job, 'service_package', '') or ''
+    if '15d' in pkg or '15' in pkg:
+        val_days = 15
+        val_title = "VALID FOR 15 DAYS"
+        val_sub = "This certificate is valid for 15 days from issuance date."
+    else:
+        val_days = 90
+        val_title = "VALID FOR 90 DAYS (3 MONTHS)"
+        val_sub = "This certificate is valid for 90 days from issuance date."
+
+    expire_dt = certificate.created_at.date() + datetime.timedelta(days=val_days)
+    expiry_date_str = expire_dt.strftime("%d %B %Y").upper()
+
+    # Left Card: Validity Duration
     c.setFillColorRGB(0.98, 0.98, 0.98)
     c.rect(40, cards_y, 240, 68, fill=True, stroke=False)
     c.setStrokeColorRGB(0.9, 0.9, 0.9)
@@ -315,46 +332,26 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     
     c.setFont(FONT_BOLD, 8)
     c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(55, cards_y + 44, "VALID FOR 6 MONTHS")
+    c.drawString(55, cards_y + 44, val_title)
     c.setFont(FONT_REGULAR, 6.5)
     c.setFillColorRGB(0.45, 0.45, 0.45)
-    c.drawString(55, cards_y + 28, "This certificate is valid for 6 months")
-    c.drawString(55, cards_y + 17, "from the inspection date.")
+    c.drawString(55, cards_y + 28, val_sub)
+    c.drawString(55, cards_y + 17, "Re-inspection required after expiration.")
     
     # Right Card: Valid Until Date
     c.setFillColorRGB(0.98, 0.98, 0.98)
     c.rect(315, cards_y, 240, 68, fill=True, stroke=False)
     c.rect(315, cards_y, 240, 68, fill=False, stroke=True)
     
-    # Calculate expiry (6 months)
-    dt = certificate.created_at
-    month = dt.month + 6
-    year = dt.year
-    if month > 12:
-        month -= 12
-        year += 1
-    try:
-        expire_dt = datetime.date(year, month, dt.day)
-    except ValueError:
-        if month == 2:
-            is_leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-            expire_dt = datetime.date(year, month, 29 if is_leap else 28)
-        elif month in (4, 6, 9, 11):
-            expire_dt = datetime.date(year, month, 30)
-        else:
-            expire_dt = datetime.date(year, month, 31)
-            
-    expiry_date_str = expire_dt.strftime("%d %B %Y").upper()
-    
     c.setFont(FONT_BOLD, 6.5)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(330, cards_y + 48, "VALID UNTIL")
+    c.drawString(330, cards_y + 48, "EXPIRATION DATE")
     c.setFont(FONT_BOLD, 13.5)
     c.setFillColorRGB(0.08, 0.08, 0.08)
     c.drawString(330, cards_y + 30, expiry_date_str)
     c.setFont(FONT_REGULAR, 5.5)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(330, cards_y + 17, "(ONLINE VERIFICATION)")
+    c.drawString(330, cards_y + 17, "(ONLINE VERIFICATION AT TRUSTLABTHAILAND.COM)")
     c.restoreState()
     
     # 8. Important Notice & Footer Notes
@@ -367,7 +364,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.setFont(FONT_REGULAR, 5.5)
     c.setFillColorRGB(0.5, 0.5, 0.5)
     bullets = [
-        "Authentication is based on available inspection criteria at the time of examination.",
+        "This result is based on visual and laboratory inspection using current data and available reference standards.",
         "Results do not guarantee identification of all modifications, repairs, or replaced parts.",
         "This certificate confirms the authenticity of the item examined by TRUST LAB THAILAND based on the standard inspection process.",
         "This certificate does not represent a guarantee of the item or any affiliated brand."
@@ -376,9 +373,15 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.drawString(40, notice_y - 10 - (idx * 8), f"·  {bullet}")
         
     # Footer Links & Tiny verification indicator
-    c.drawString(40, 42, "trustlab.co.th")
-    c.drawString(110, 42, "instagram: trustlab.thailand")
-    c.drawString(220, 42, "line: @trustlab")
+    c.drawString(40, 42, "www.trustlabthailand.com")
+    c.drawString(180, 42, "instagram: @trustlabthailand")
+    c.drawString(320, 42, "line: @trustlabthailand")
+    
+    # Draw small bottom right QR code
+    c.setFont(FONT_REGULAR, 5.5)
+    c.drawRightString(width - 80, 42, "SCAN TO VERIFY")
+    c.drawImage(qr_reader, width - 70, 32, width=30, height=30)
+    c.restoreState()
     
     # Draw small bottom right QR code
     c.setFont(FONT_REGULAR, 5.5)
