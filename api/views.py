@@ -1073,6 +1073,25 @@ def public_invoice_preview(request):
     COMP_TAX_ID = "0105569150179"
     COMP_TEL = "( รออัพเดทเบอร์ร้าน )"
 
+    # Base64 Logo for 100% reliable image rendering in print & server preview
+    import base64
+    logo_src = "/logo-trust-lab.png"
+    logo_candidates = [
+        os.path.join(settings.BASE_DIR, 'assets', 'logo-trust-lab.png'),
+        os.path.join(settings.BASE_DIR, '..', 'public', 'logo-trust-lab.png'),
+        os.path.join(settings.BASE_DIR, 'public', 'logo-trust-lab.png'),
+        '/app/assets/logo-trust-lab.png',
+        '/app/public/logo-trust-lab.png'
+    ]
+    for lpath in logo_candidates:
+        if os.path.exists(lpath):
+            try:
+                with open(lpath, 'rb') as f:
+                    logo_src = 'data:image/png;base64,' + base64.b64encode(f.read()).decode()
+                break
+            except Exception:
+                pass
+
     if is_slip:
         # ── ABBREVIATED TAX INVOICE / RECEIPT (80mm POS Slip) ───────────
         items_rows = ""
@@ -1112,14 +1131,14 @@ def public_invoice_preview(request):
   .sep {{ border-top:1px dashed #aaa; margin:8px 0; }}
   .row {{ display:flex; justify-content:space-between; margin:3px 0; }}
   .label {{ color:#555; }}
-  .total-bar {{ background:#111; color:#fff; padding:6px 8px; font-size:13px; font-weight:700; display:flex; justify-content:space-between; margin-top:8px; border-radius:4px; }}
+  .total-bar {{ background:#f3f4f6; color:#111827; border:1px solid #d1d5db; border-top:2px solid #111827; padding:6px 8px; font-size:13px; font-weight:700; display:flex; justify-content:space-between; margin-top:8px; border-radius:4px; }}
   .footer {{ font-size:9px; color:#666; text-align:center; margin-top:12px; }}
   @media print {{ @page {{ margin:0; size:80mm auto; }} body {{ padding:4px; }} }}
 </style>
 </head>
 <body>
 <div class="center">
-  <img src="/logo-trust-lab.png" alt="Trust Lab" style="height:32px;margin-bottom:4px;" />
+  <img src="{logo_src}" alt="Trust Lab" style="height:32px;margin-bottom:4px;" />
   <div class="logo-text">TRUST LAB THAILAND</div>
   <div style="font-size:8.5px;color:#444;line-height:1.3;margin-top:4px;">
     {COMP_NAME}<br>
@@ -1199,7 +1218,7 @@ def public_invoice_preview(request):
               <div class="header">
                 <div class="company-brand">
                   <div style="display:flex;align-items:center;gap:10px;">
-                    <img src="/logo-trust-lab.png" alt="Logo" style="height:38px;" />
+                    <img src="{logo_src}" alt="Logo" style="height:38px;" />
                     <div>
                       <div class="brand-title">TRUST LAB</div>
                       <div class="brand-slogan">VERIFY · INSPECT · ASSURE</div>
@@ -1358,7 +1377,7 @@ def public_invoice_preview(request):
   .calc-table {{ width:290px; border-collapse:collapse; font-size:11px; }}
   .calc-table td {{ padding:4px 0; color:#4b5563; }}
   .calc-table td:last-child {{ color:#111827; font-weight:600; }}
-  .grand-total-row td {{ background:#111827; color:#fff !important; font-size:13px; font-weight:700; padding:8px 10px; border-radius:4px; margin-top:6px; }}
+  .grand-total-row td {{ background:#f3f4f6; color:#111827 !important; font-size:13px; font-weight:800; padding:8px 10px; border-radius:4px; border:1px solid #e5e7eb; border-top:2px solid #111827; }}
 
   .signatures-wrapper {{ display:flex; justify-content:space-between; align-items:flex-end; margin-top:30px; padding-top:20px; border-top:1px solid #e5e7eb; text-align:center; }}
   .sig-box {{ width:180px; }}
