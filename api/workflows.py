@@ -710,7 +710,22 @@ def walkin(request):
 
     if data.get('action') == 'update_only' or request.method == 'PUT':
         job = Job.objects.filter(booking=booking).first()
-        if job:
+        if not job:
+            Branch.objects.select_for_update().get(pk=booking.branch_id)
+            count = Job.objects.filter(created_at__date=timezone.localdate()).count()
+            job = Job.objects.create(
+                booking=booking, customer=booking.customer, category=data.get('category', booking.category),
+                brand=data.get('brand') or booking.brand_name, model=data.get('model', booking.model),
+                color=str(data.get('color', '')).strip(), serial_number=str(data.get('serial_number', '')).strip(),
+                material=str(data.get('material', '')).strip(), accessories=str(data.get('accessories', '')).strip(),
+                notes=str(data.get('note', booking.note)).strip(), expert_instruction=str(data.get('expert_instruction', '')).strip(),
+                queue_no=f'{booking.branch_id}-{count + 1:03}', service_package=booking.service_package,
+                price_snapshot=booking.price_snapshot or {}, price=booking.price_snapshot.get('total', 0) if booking.price_snapshot else 0,
+                vat_amount=booking.price_snapshot.get('vat_amount', 0) if booking.price_snapshot else 0,
+                payment_method=booking.payment_method, payment_status=booking.payment_status,
+                shipping_status='pending_return' if booking.delivery_method == 'shipping' else 'not_applicable'
+            )
+        else:
             for f in ('serial_number', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
                 if f in data:
                     setattr(job, f, str(data[f]).strip())
@@ -718,6 +733,8 @@ def walkin(request):
                 job.brand = str(data.get('brand') or data.get('brand_name')).strip()
             if 'model' in data:
                 job.model = str(data['model']).strip()
+            if 'category' in data:
+                job.category = str(data['category']).strip()
             job.save()
         booking.refresh_from_db()
         return Response(walkin_detail(booking, request), status=200)
