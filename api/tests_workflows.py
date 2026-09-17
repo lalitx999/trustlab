@@ -244,3 +244,98 @@ class WorkflowTests(TestCase):
         self.assertEqual(response.status_code,200)
         j.refresh_from_db();self.assertEqual(j.status,'in_progress');self.assertIsNone(j.result)
         self.assertFalse(Certificate.objects.exists())
+
+    def walkin_payload(self, **changes):
+        self.client.force_authenticate(self.front)
+        data = {**self.data, 'customer_id': self.customer.pk, 'mark_paid': True, 'method': 'cash',
+                'payment_method': 'cash', 'reference': 'CASH-TEST', 'amount': '1070.00',
+                'color': 'Black', 'material': 'Leather', 'serial_number': 'SERIAL-1',
+                'accessories': 'Box', 'expert_instruction': 'Check stitching', **changes}
+        result = self.client.post('/api/checkout/quote', data, format='json')
+        self.assertEqual(result.status_code, 200, result.data)
+        data['quote_token'] = result.data['quote_token']
+        return data
+
+    def test_walkin_atomic_paid_job_and_retry(self):
+        data = self.walkin_payload()
+        for _ in range(2):
+            r = self.client.post('/api/walk-in', data, format='json')
+            self.assertEqual(r.status_code, 200, r.data)
+            self.assertEqual(r.data['booking']['payment_status'], 'paid')
+            self.assertEqual(r.data['job']['payment_status'], 'paid')
+            self.assertEqual(r.json()['data']['job']['accessories'], 'Box')
+        self.assertEqual(Booking.objects.count(), 1)
+        self.assertEqual(Job.objects.count(), 1)
+        job = Job.objects.get()
+        self.assertEqual(job.material, 'Leather')
+        self.assertEqual(job.expert_instruction, 'Check stitching')
+        self.assertEqual(job.price, Decimal('1070'))
+
+    def test_walkin_failed_payment_rolls_back_intake(self):
+        r = self.client.post('/api/walk-in', self.walkin_payload(amount='1'), format='json')
+        self.assertEqual(r.status_code, 400, r.data)
+        self.assertFalse(Booking.objects.exists())
+        self.assertFalse(Job.objects.exists())
+
+    def test_walkin_unpaid_receive_existing_without_duplicate(self):
+        r = self.client.post('/api/walk-in', self.walkin_payload(mark_paid=False), format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        booking = r.data['booking']
+        self.assertEqual(booking['payment_status'], 'unpaid')
+        data = {'booking_id': booking['booking_id'], 'mark_paid': True, 'method': 'credit_card', 'reference': 'EDC-12', 'amount': '1070'}
+        r = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data['job']['payment_status'], 'paid')
+        self.assertEqual(Job.objects.count(), 1)
+        r = self.client.get('/api/walk-in', {'booking_id': booking['booking_id']})
+        self.assertEqual(r.data['booking']['payment_method'], 'credit_card')
+
+    def test_walkin_staff_manual_price_is_explicit_and_signed(self):
+        data = self.walkin_payload(brand='Other', manual_service_amount='1250', price_reason='Agreed quote 123', amount='1250')
+        r = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.data['booking']['price_snapshot']['total'], '1250.00')
+        self.client.force_authenticate(self.user)
+        self.assertEqual(self.client.post('/api/checkout/quote', data, format='json').status_code, 400)
+
+    def test_walkin_stale_price_and_missing_price_rejected(self):
+        data = self.walkin_payload()
+        PackagePrice.objects.filter(package_id='cert_15d').update(amount=2000)
+        self.assertEqual(self.client.post('/api/walk-in', data, format='json').status_code, 400)
+        self.assertFalse(Job.objects.exists())
+        self.assertEqual(self.client.post('/api/checkout/quote', {**data, 'brand': 'Unknown'}, format='json').status_code, 400)
+
+    def test_walkin_customer_forbidden_and_counter_transfers(self):
+        self.assertEqual(self.client.get('/api/walk-in').status_code, 403)
+        for method in ('transfer', 'promptpay'):
+            r = self.client.post('/api/walk-in', self.walkin_payload(method=method, payment_method=method, request_key=str(uuid.uuid4())), format='json')
+            self.assertEqual(r.status_code, 200, r.data)
+            self.assertEqual(r.data['job']['payment_method'], method)
+        self.assertEqual(self.client.get('/api/walk-in').status_code, 200)
+
+    def test_walkin_online_slip_still_requires_admin_review(self):
+        booking, _ = self.create_booking(payment_method='promptpay', slip_base64=photo())
+        self.client.force_authenticate(self.front)
+        payload = {'booking_id': booking.pk, 'mark_paid': True, 'method': 'promptpay', 'amount': '1070', 'reference': 'BANK-1'}
+        self.assertEqual(self.client.post('/api/walk-in', payload, format='json').status_code, 403)
+        self.assertFalse(Job.objects.exists())
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.client.post('/api/walk-in', payload, format='json').status_code, 200)
+
+    def test_walkin_wallet_retry_charges_once(self):
+        data = self.walkin_payload(payment_method='wallet', method='wallet')
+        for _ in range(2):
+            response = self.client.post('/api/walk-in', data, format='json')
+            self.assertEqual(response.status_code, 200, response.data)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.credit_balance, Decimal('930'))
+        self.assertEqual(CreditEntry.objects.count(), 1)
+
+    def test_walkin_qr_amount_and_photo_job(self):
+        data = self.walkin_payload(service_package='photo_review', photos=[photo()], amount='500', mark_paid=False)
+        response = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.client.post('/api/walk-in/qr', {'booking_id': response.data['booking']['id']}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['amount'], '500.00')
+        self.assertTrue(response.data['qr_image'].startswith('data:image/png'))

@@ -61,7 +61,7 @@ def packages(request):
 @permission_classes([AllowAny])
 def checkout_quote(request):
     customer = customer_for(request, request.data)
-    snapshot = quote(request.data, customer)
+    snapshot = quote(request.data, customer, allow_missing_price=IsFrontDesk().has_permission(request, None))
     return Response({**snapshot, 'quote_token': signed_quote(snapshot, customer)})
 
 
@@ -84,6 +84,10 @@ def bookings(request):
         return Response(BookingSerializer(Booking.objects.all().order_by('-created_at'), many=True, context={'request': request}).data)
     if staff(request.user) and not IsFrontDesk().has_permission(request, None):
         raise PermissionDenied()
+    return create_booking(request)
+
+
+def create_booking(request):
     with transaction.atomic():
         data = request.data
         try:
@@ -107,8 +111,7 @@ def bookings(request):
                              'receipt_token': signing.dumps({'booking_id': previous.pk, 'request_key': str(previous.request_key)}, salt='receipt')})
         is_frontdesk = IsFrontDesk().has_permission(request, None)
         snapshot = quote(data, customer, allow_missing_price=is_frontdesk)
-        if not is_frontdesk:
-            verify_quote(data.get('quote_token'), snapshot, customer)
+        verify_quote(data.get('quote_token'), snapshot, customer)
         if not customer:
             name = str(data.get('customerName', '')).strip()
             phone = ''.join(c for c in str(data.get('phone', '')) if c.isdigit())
@@ -116,7 +119,7 @@ def bookings(request):
                 raise ValidationError('กรุณาระบุชื่อและเบอร์โทรให้ครบ')
             if Customer.objects.filter(phone_number=phone).exists():
                 raise ValidationError('เบอร์นี้มีข้อมูลลูกค้าแล้ว กรุณาเข้าสู่ระบบหรือติดต่อเจ้าหน้าที่')
-            customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None)
+            customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, note=data.get('customer_note', ''))
         branch = get_object_or_404(Branch, pk=data.get('branch_id'), is_active=True)
         try:
             date = datetime.date.fromisoformat(data.get('date', ''))
@@ -141,7 +144,9 @@ def bookings(request):
             raise ValidationError('ไม่รองรับช่องทางชำระนี้')
         if payment == 'wallet' and not request.user.is_authenticated:
             raise PermissionDenied('กรุณาเข้าสู่ระบบก่อนใช้เครดิต')
-        evidence = image_data(data.get('slip_base64')) if payment == 'promptpay' else ''
+        evidence = image_data(data.get('slip_base64')) if data.get('slip_base64') and payment in ('promptpay', 'transfer') else ''
+        if payment == 'promptpay' and not evidence and not is_frontdesk:
+            raise ValidationError('กรุณาแนบสลิปชำระเงิน')
         service, _ = ServiceType.objects.get_or_create(service_name=snapshot['service_package'], defaults={'description': 'Meeting package', 'price_note': ''})
         booking = Booking.objects.create(customer=customer, branch=branch, booking_date=date, booking_time=time,
             service_type=service, service_package=snapshot['service_package'], category=snapshot['category'],
@@ -171,6 +176,10 @@ def bookings(request):
 @permission_classes([IsFrontDesk])
 @transaction.atomic
 def check_in(request, pk):
+    return receive_booking(request, pk)
+
+
+def receive_booking(request, pk):
     booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(pk))
     if booking.status == 'cancelled':
         raise ValidationError('รายการถูกยกเลิกแล้ว')
@@ -184,7 +193,10 @@ def check_in(request, pk):
     count = Job.objects.filter(created_at__date=timezone.localdate()).count()
     job = Job.objects.create(booking=booking, customer=booking.customer, category=booking.category,
         brand=booking.brand_name, model=booking.model, color=request.data.get('color', ''),
-        serial_number=request.data.get('serial_number', ''), queue_no=f'{booking.branch_id}-{count + 1:03}',
+        serial_number=request.data.get('serial_number', ''),
+        material=request.data.get('material', ''), sub_category=request.data.get('sub_category', ''),
+        accessories=request.data.get('accessories', ''), notes=request.data.get('note', booking.note),
+        expert_instruction=request.data.get('expert_instruction', ''), queue_no=f'{booking.branch_id}-{count + 1:03}',
         service_package=booking.service_package, price_snapshot=booking.price_snapshot,
         price=booking.price_snapshot['total'], vat_amount=booking.price_snapshot['vat_amount'],
         payment_method=booking.payment_method, payment_status=booking.payment_status,
@@ -298,15 +310,21 @@ def payment_review(request, pk):
 @permission_classes([IsFrontDesk])
 @transaction.atomic
 def counter_payment(request, pk):
+    return receive_payment(request, pk)
+
+
+def receive_payment(request, pk):
     booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk)
     if booking.payment_status == 'paid':
         return Response({'status': 'paid'})
     method = request.data.get('method')
     reference = str(request.data.get('reference', '')).strip()
-    if method not in ('cash', 'credit_card') or not reference or booking.status == 'cancelled' or not booking.price_snapshot:
-        raise ValidationError('ระบุเงินสดหรือ EDC พร้อมเลขอ้างอิงรายการ')
+    if method not in ('cash', 'credit_card', 'transfer', 'promptpay') or not reference or booking.status == 'cancelled' or not booking.price_snapshot:
+        raise ValidationError('เลือกช่องทางรับเงินพร้อมเลขอ้างอิงรายการ')
     if money(request.data.get('amount')) != money(booking.price_snapshot['total']):
         raise ValidationError('ยอดรับชำระไม่ตรง')
+    if booking.payment_status == 'pending_review' and not IsAdministrator().has_permission(request, None):
+        raise PermissionDenied('รายการแนบสลิปออนไลน์ต้องให้ผู้ดูแลตรวจสอบก่อน')
     booking.payment_status, booking.payment_method = 'paid', method
     if booking.status == 'pending':
         booking.status = 'confirmed'
@@ -620,3 +638,45 @@ def daily_report_pdf(request):
     response = HttpResponse(generate_daily_report_pdf(stats, today.strftime('%d/%m/%Y')).getvalue(), content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="daily-report-{today.isoformat()}.pdf"'
     return response
+
+
+def walkin_detail(booking, request):
+    job = Job.objects.filter(booking=booking).first()
+    return {'booking': BookingSerializer(booking, context={'request': request}).data,
+            'job': JobSerializer(job, context={'request': request}).data if job else None,
+            'cancellation': CancellationRequest.objects.filter(booking=booking).values('id', 'status', 'reason', 'refund_status', 'refund_amount').first()}
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsFrontDesk])
+@transaction.atomic
+def walkin(request):
+    """One counter transaction: intake, queue and optional verified payment."""
+    if request.method == 'GET':
+        if request.query_params.get('booking_id'):
+            booking = get_object_or_404(Booking, pk=pk_value(request.query_params['booking_id']))
+            return Response(walkin_detail(booking, request))
+        rows = Booking.objects.select_related('customer', 'branch', 'service_type').order_by('-created_at')[:100]
+        return Response([walkin_detail(booking, request) for booking in rows])
+    data = request.data
+    if data.get('booking_id'):
+        booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(data['booking_id']))
+        if booking.status == 'cancelled':
+            raise ValidationError('รายการนี้ถูกยกเลิกแล้ว')
+    else:
+        response = create_booking(request)
+        booking = Booking.objects.select_for_update().get(pk=response.data['booking_id'])
+    receive_booking(request, booking.pk)
+    if data.get('mark_paid') is True and booking.payment_status != 'paid':
+        receive_payment(request, booking.pk)
+    booking.refresh_from_db()
+    return Response(walkin_detail(booking, request), status=200)
+
+
+@api_view(['POST'])
+@permission_classes([IsFrontDesk])
+def walkin_qr(request):
+    booking = get_object_or_404(Booking, pk=pk_value(request.data.get('booking_id')))
+    if booking.status == 'cancelled' or booking.payment_status == 'paid' or not booking.price_snapshot:
+        raise ValidationError('รายการนี้ไม่อยู่ในสถานะรับชำระ')
+    return Response({'qr_image': qr_image(booking.price_snapshot['total']), 'amount': booking.price_snapshot['total']})

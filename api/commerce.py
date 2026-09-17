@@ -32,9 +32,6 @@ def customer_for(request, data):
     return None
 
 
-WALKIN_PRICES = {'cert_15d': Decimal('1000.00'), 'cert_90d': Decimal('3000.00')}
-
-
 def quote(data, customer=None, allow_missing_price=False):
     policy = CheckoutPolicy.objects.filter(pk=1, approved=True).first()
     if not policy:
@@ -55,8 +52,10 @@ def quote(data, customer=None, allow_missing_price=False):
     else:
         rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=brand, member_tier__iexact=tier).first()
         if not rate:
-            if allow_missing_price and code in WALKIN_PRICES:
-                amount = WALKIN_PRICES[code]
+            if allow_missing_price and data.get('manual_service_amount') is not None:
+                if not str(data.get('price_reason', '')).strip():
+                    raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
+                amount = money(data['manual_service_amount'])
             else:
                 raise ValidationError('ยังไม่ตั้งราคาแพ็กเกจ/ประเภท/แบรนด์/ระดับสมาชิกนี้ กรุณาติดต่อเจ้าหน้าที่')
         else:
@@ -77,6 +76,7 @@ def quote(data, customer=None, allow_missing_price=False):
             'service_amount': str(money(amount)), 'shipping_fee': str(money(shipping)), 'vat_amount': str(vat),
             'subtotal': str(money(total - vat)), 'total': str(total), 'currency': 'THB',
             'prices_include_vat': policy.prices_include_vat, 'delivery_method': delivery,
+            'price_reason': str(data.get('price_reason', '')).strip() if allow_missing_price and data.get('manual_service_amount') is not None else '',
             'policy_version': policy.updated_at.isoformat()}
 
 

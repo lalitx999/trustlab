@@ -45,6 +45,8 @@ from .views import (
 from . import workflows as flow
 
 urlpatterns = [
+    path('walk-in', flow.walkin),
+    path('walk-in/qr', flow.walkin_qr),
     path('booking-receipt', flow.booking_receipt),
     path('service-packages', flow.packages),
     path('checkout/quote', flow.checkout_quote),
