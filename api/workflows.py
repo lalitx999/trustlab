@@ -74,7 +74,14 @@ def promptpay_quote(request):
         value = signing.loads(request.data.get('quote_token'), salt='checkout', max_age=1800)
     except (signing.BadSignature, TypeError):
         raise ValidationError('กรุณาคำนวณยอดใหม่ก่อนสร้าง QR')
-    return Response({'qr_image': qr_image(value['quote']['total']), 'amount': value['quote']['total']})
+    return Response({
+        'qr_image': qr_image(value['quote']['total']),
+        'amount': value['quote']['total'],
+        'bank_name': 'กสิกรไทย (KBANK)',
+        'account_name': 'บริษัท เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น (ไทยแลนด์) จำกัด',
+        'account_no': '123-4-56789-0 (รอเลขจริง)',
+        'promptpay_no': '0105569150179'
+    })
 
 
 @api_view(['GET', 'POST'])
@@ -152,6 +159,9 @@ def create_booking(request):
         evidence = image_data(data.get('slip_base64')) if data.get('slip_base64') and payment in ('promptpay', 'transfer') else ''
         if payment == 'promptpay' and not evidence and not is_frontdesk:
             raise ValidationError('กรุณาแนบสลิปชำระเงิน')
+        if evidence:
+            from .easyslip import verify_slip_image
+            verify_slip_image(evidence, snapshot['total'])
         service, _ = ServiceType.objects.get_or_create(service_name=snapshot['service_package'], defaults={'description': 'Meeting package', 'price_note': ''})
         booking = Booking.objects.create(customer=customer, branch=branch, booking_date=date, booking_time=time,
             service_type=service, service_package=snapshot['service_package'], category=snapshot['category'],
