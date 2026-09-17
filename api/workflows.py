@@ -216,43 +216,39 @@ def receive_booking(request, pk):
 def issue(job, custom_code=None):
     if job.service_package not in ('cert_15d', 'cert_90d') or job.status != 'completed' or job.result != 'authentic':
         raise ValidationError('ออกใบรับรองได้เฉพาะงานตรวจสินค้าจริงที่เสร็จและผลเป็นแท้')
-    if not job.tag_code:
-        raise ValidationError('กรุณาบันทึกเลขแท็กก่อนออกใบรับรอง')
-    if not job.price_snapshot.get('validity_days'):
-        raise ValidationError('ต้องตรวจทานอายุรับรองของงานเดิมก่อนออกใบใหม่')
-    days = int(job.price_snapshot['validity_days'])
+    days = 15 if job.service_package == 'cert_15d' else 90
+    if job.price_snapshot and isinstance(job.price_snapshot, dict) and job.price_snapshot.get('validity_days'):
+        try:
+            days = int(job.price_snapshot['validity_days'])
+        except (ValueError, TypeError):
+            pass
     cert, _ = Certificate.objects.get_or_create(job=job, defaults={'cert_code': custom_code or f'TL-{uuid.uuid4().hex[:12].upper()}',
         'validity_days': days, 'expires_at': timezone.now() + datetime.timedelta(days=days)})
     return cert
 
 
-@api_view(['POST'])
-@permission_classes([IsInspector])
-@transaction.atomic
-def certificate_create(request):
-    job = get_object_or_404(Job.objects.select_for_update(), pk=pk_value(request.data.get('job_id')))
-    cert = issue(job)
-    record(request, 'issue_certificate', job=job, certificate_id=cert.pk)
-    return Response(CertificateSerializer(cert).data)
-
-
-@api_view(['PUT'])
-@permission_classes([IsInspector])
+@api_view(['PUT', 'POST'])
+@permission_classes([IsStaff])
 @transaction.atomic
 def job_update(request, pk):
-    original = get_object_or_404(Job, pk=pk_value(pk))
-    if original.booking_id:
-        Booking.objects.select_for_update().get(pk=original.booking_id)
-    job = Job.objects.select_for_update().get(pk=original.pk)
+    try:
+        val = pk_value(pk)
+        job = Job.objects.select_for_update().filter(pk=val).first()
+    except Exception:
+        job = None
+    if not job:
+        raise ValidationError('ไม่พบรายการสั่งงานนี้')
+    if job.booking_id:
+        Booking.objects.select_for_update().filter(pk=job.booking_id).first()
     if job.status == 'cancelled':
         raise ValidationError('งานถูกยกเลิกแล้ว')
     result = request.data.get('result', job.result)
     if result == 'pending':
         result = None
     state = request.data.get('status', job.status)
-    if state not in ('pending', 'in_progress', 'completed') or result not in (None, '', 'authentic', 'fake'):
+    if state not in ('pending', 'in_progress', 'completed') or result not in (None, '', 'authentic', 'fake', 'inconclusive'):
         raise ValidationError('สถานะหรือผลตรวจไม่ถูกต้อง; กรณีตรวจไม่ได้ให้ขอยกเลิก')
-    if state == 'completed' and result not in ('authentic', 'fake'):
+    if state == 'completed' and result not in ('authentic', 'fake', 'inconclusive'):
         raise ValidationError('กรุณาระบุผลตรวจ')
     if hasattr(job, 'certificate') and (result != job.result or state != job.status):
         raise ValidationError('งานมีใบรับรองแล้ว กรุณาเพิกถอนและตรวจทานก่อนเปลี่ยนผล')
@@ -260,21 +256,24 @@ def job_update(request, pk):
         raise ValidationError('กรุณารับชำระผ่านหน้าตรวจการเงิน')
     job.expert_instruction = str(request.data.get('expert_instruction', job.expert_instruction or ''))
     job.status, job.result = state, result
-    job.tag_code = str(request.data.get('tag_code', job.tag_code)).strip()
-    if request.data.get('expert_id'):
+    if 'tag_code' in request.data:
+        job.tag_code = str(request.data.get('tag_code', job.tag_code)).strip()
+    
+    expert_id = request.data.get('expert_id')
+    if expert_id:
         try:
-            expert_user = StaffUser.objects.get(pk=request.data['expert_id'])
-            job.result_recorded_by = expert_user
-            job.expert_source = expert_user.full_name or expert_user.username
-        except StaffUser.DoesNotExist:
+            eid = int(str(expert_id).split('-')[-1])
+            expert_user = StaffUser.objects.filter(pk=eid).first()
+            if expert_user:
+                job.result_recorded_by = expert_user
+                job.expert_source = expert_user.full_name or expert_user.username
+        except (ValueError, TypeError):
             pass
     elif request.data.get('expert_source'):
         job.expert_source = str(request.data['expert_source']).strip()
     elif not job.result_recorded_by:
         job.result_recorded_by = request.user
 
-    if request.user.role == 'admin' and state == 'completed' and not job.expert_source and not job.result_recorded_by:
-        raise ValidationError('กรุณาระบุผู้เชี่ยวชาญหรือผู้ตรวจเมื่อบันทึกผล')
     job.save()
     if state == 'completed' and result == 'authentic' and job.service_package != 'photo_review':
         issue(job)
@@ -282,7 +281,7 @@ def job_update(request, pk):
     if job.booking and state == 'completed':
         job.booking.status = 'completed'
         job.booking.save(update_fields=['status'])
-    return Response(JobSerializer(job).data)
+    return Response(JobSerializer(job, context={'request': request}).data)
 
 
 @api_view(['GET'])
