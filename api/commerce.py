@@ -114,7 +114,7 @@ def quote(data, customer=None, allow_missing_price=False):
                     base_amt = bp.base_price
 
                 if package.code == 'cert_90d':
-                    found_bp_price = Decimal(str(base_amt)) + Decimal('500.00')
+                    found_bp_price = max(Decimal('3000.00'), Decimal(str(base_amt)) + Decimal('1500.00'))
                 else:
                     found_bp_price = Decimal(str(base_amt))
 
@@ -128,7 +128,7 @@ def quote(data, customer=None, allow_missing_price=False):
             amount = money(data['manual_service_amount'])
         else:
             # 4. Default Category Fallback for custom/unlisted brands
-            default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1200.00')
+            default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1000.00')
             if tier in ('silver', '5pct'):
                 default_base = money(default_base * Decimal('0.95'))
             elif tier in ('gold', 'platinum', '15pct'):
@@ -137,7 +137,7 @@ def quote(data, customer=None, allow_missing_price=False):
                 default_base = money(default_base * Decimal('0.75'))
 
             if package.code == 'cert_90d':
-                amount = default_base + Decimal('500.00')
+                amount = max(Decimal('3000.00'), default_base + Decimal('1500.00'))
             else:
                 amount = default_base
     delivery = data.get('delivery_method', 'self_pickup')
