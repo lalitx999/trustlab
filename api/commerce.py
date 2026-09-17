@@ -74,13 +74,7 @@ def quote(data, customer=None, allow_missing_price=False):
                 raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
             amount = money(data['manual_service_amount'])
         else:
-            # Fallback default price by package code if specific brand pricing record is absent
-            DEFAULT_PACKAGE_PRICES = {
-                'cert_15d': Decimal('1000.00'),
-                'cert_90d': Decimal('3000.00'),
-                'photo_review': Decimal('500.00')
-            }
-            amount = DEFAULT_PACKAGE_PRICES.get(package.code, Decimal('1000.00'))
+            raise ValidationError('ยังไม่มีราคาแพ็กเกจสำหรับแบรนด์และหมวดหมู่นี้')
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')

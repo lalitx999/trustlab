@@ -18,7 +18,7 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.response import Response
 from .models import (Booking, BookingPhoto, Branch, Customer, Job, Certificate, ServiceType,
                      ServicePackage, PackagePrice, CheckoutPolicy, TopupRequest, CreditEntry,
-                     WorkflowEvent, CancellationRequest)
+                     WorkflowEvent, CancellationRequest, StaffUser)
 from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
 from .serializers import BookingSerializer, JobSerializer, CertificateSerializer, Base64ImageField
 from .commerce import money, quote, signed_quote, verify_quote, customer_for, change_credit, staff
@@ -225,6 +225,19 @@ def issue(job, custom_code=None):
     cert, _ = Certificate.objects.get_or_create(job=job, defaults={'cert_code': custom_code or f'TL-{uuid.uuid4().hex[:12].upper()}',
         'validity_days': days, 'expires_at': timezone.now() + datetime.timedelta(days=days)})
     return cert
+
+
+@api_view(['POST'])
+@permission_classes([IsInspector])
+@transaction.atomic
+def certificate_create(request):
+    job_id = request.data.get('job_id')
+    if not job_id:
+        raise ValidationError('กรุณาระบุ job_id')
+    job = get_object_or_404(Job.objects.select_for_update(), pk=pk_value(job_id))
+    cert = issue(job, custom_code=request.data.get('cert_code'))
+    record(request, 'issue_certificate', job=job, cert_code=cert.cert_code)
+    return Response(CertificateSerializer(cert).data, status=201)
 
 
 @api_view(['PUT', 'POST'])
