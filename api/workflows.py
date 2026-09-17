@@ -185,6 +185,14 @@ def receive_booking(request, pk):
         raise ValidationError('รายการถูกยกเลิกแล้ว')
     existing = Job.objects.filter(booking=booking).first()
     if existing:
+        for f in ('serial_number', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
+            if f in request.data:
+                setattr(existing, f, str(request.data[f]).strip())
+        if 'brand' in request.data or 'brand_name' in request.data:
+            existing.brand = str(request.data.get('brand') or request.data.get('brand_name')).strip()
+        if 'model' in request.data:
+            existing.model = str(request.data['model']).strip()
+        existing.save()
         return Response(JobSerializer(existing).data)
     if not booking.price_snapshot or not booking.service_package:
         raise ValidationError('รายการเดิมต้องตรวจทานแพ็กเกจและราคาใหม่ก่อนรับงาน')
@@ -192,7 +200,7 @@ def receive_booking(request, pk):
     Branch.objects.select_for_update().get(pk=booking.branch_id)
     count = Job.objects.filter(created_at__date=timezone.localdate()).count()
     job = Job.objects.create(booking=booking, customer=booking.customer, category=booking.category,
-        brand=booking.brand_name, model=booking.model, color=request.data.get('color', ''),
+        brand=request.data.get('brand', booking.brand_name), model=request.data.get('model', booking.model), color=request.data.get('color', ''),
         serial_number=request.data.get('serial_number', ''),
         material=request.data.get('material', ''), sub_category=request.data.get('sub_category', ''),
         accessories=request.data.get('accessories', ''), notes=request.data.get('note', booking.note),
@@ -647,7 +655,7 @@ def walkin_detail(booking, request):
             'cancellation': CancellationRequest.objects.filter(booking=booking).values('id', 'status', 'reason', 'refund_status', 'refund_amount').first()}
 
 
-@api_view(['GET', 'POST'])
+@api_view(['GET', 'POST', 'PUT'])
 @permission_classes([IsFrontDesk])
 @transaction.atomic
 def walkin(request):
@@ -663,9 +671,57 @@ def walkin(request):
         booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(data['booking_id']))
         if booking.status == 'cancelled':
             raise ValidationError('รายการนี้ถูกยกเลิกแล้ว')
+        
+        # Update customer details if provided
+        if booking.customer:
+            c = booking.customer
+            c_changed = False
+            if 'customer_name' in data and data['customer_name']:
+                c.full_name = str(data['customer_name']).strip()
+                c_changed = True
+            if 'customer_phone' in data and data['customer_phone']:
+                c.phone_number = str(data['customer_phone']).strip()
+                c_changed = True
+            if 'customer_email' in data:
+                c.email = str(data['customer_email']).strip() or None
+                c_changed = True
+            if c_changed:
+                c.save()
+
+        # Update booking product details if provided
+        b_changed = False
+        if 'brand' in data or 'brand_name' in data:
+            booking.brand_name = str(data.get('brand') or data.get('brand_name')).strip()
+            b_changed = True
+        if 'model' in data:
+            booking.model = str(data['model']).strip()
+            b_changed = True
+        if 'category' in data:
+            booking.category = str(data['category']).strip()
+            b_changed = True
+        if 'note' in data:
+            booking.note = str(data['note']).strip()
+            b_changed = True
+        if b_changed:
+            booking.save()
     else:
         response = create_booking(request)
         booking = Booking.objects.select_for_update().get(pk=response.data['booking_id'])
+
+    if data.get('action') == 'update_only' or request.method == 'PUT':
+        job = Job.objects.filter(booking=booking).first()
+        if job:
+            for f in ('serial_number', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
+                if f in data:
+                    setattr(job, f, str(data[f]).strip())
+            if 'brand' in data or 'brand_name' in data:
+                job.brand = str(data.get('brand') or data.get('brand_name')).strip()
+            if 'model' in data:
+                job.model = str(data['model']).strip()
+            job.save()
+        booking.refresh_from_db()
+        return Response(walkin_detail(booking, request), status=200)
+
     receive_booking(request, booking.pk)
     if data.get('mark_paid') is True and booking.payment_status != 'paid':
         receive_payment(request, booking.pk)
