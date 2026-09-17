@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from django.core import signing
 from django.db import transaction
 from rest_framework.exceptions import ValidationError, PermissionDenied
-from .models import CheckoutPolicy, PackagePrice, ServicePackage, Customer, CreditEntry
+from .models import CheckoutPolicy, PackagePrice, ServicePackage, Customer, CreditEntry, BrandPricing
 
 CENT = Decimal('0.01')
 
@@ -53,28 +53,93 @@ def quote(data, customer=None, allow_missing_price=False):
     if package.code == 'photo_review':
         amount = Decimal('500.00')
     else:
+        # 1. Look in PackagePrice (exact or alias match)
         rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=brand, member_tier__iexact=tier).first()
+        
+        alias_map = {
+            'louis vuitton': ['lv', 'louis vuitton'],
+            'lv': ['louis vuitton', 'lv'],
+            'saint laurent': ['ysl', 'saint laurent'],
+            'ysl': ['saint laurent', 'ysl'],
+            'bottega veneta': ['bottega', 'bottega veneta'],
+            'bottega': ['bottega veneta', 'bottega'],
+            'miu miu': ['miumiu', 'miu miu'],
+            'miumiu': ['miu miu', 'miumiu'],
+            'celine': ['celne', 'celine'],
+            'celne': ['celine', 'celne'],
+            'max mara': ['maxmara', 'max mara'],
+            'maxmara': ['max mara', 'maxmara'],
+            'tiffany & co.': ['tiffany', 'tiffany & co.'],
+            'tiffany': ['tiffany & co.', 'tiffany']
+        }
+        
         if not rate:
-            alias_map = {
-                'louis vuitton': 'lv', 'lv': 'lv',
-                'saint laurent': 'ysl', 'ysl': 'ysl',
-                'bottega veneta': 'bottega', 'bottega': 'bottega',
-                'miu miu': 'miumiu', 'miumiu': 'miumiu',
-                'celine': 'celne', 'celne': 'celne',
-                'max mara': 'maxmara', 'maxmara': 'maxmara',
-                'tiffany & co.': 'tiffany', 'tiffany': 'tiffany'
-            }
-            alias_brand = alias_map.get(brand.lower(), brand)
-            rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=alias_brand, member_tier__iexact=tier).first()
+            possible_brands = alias_map.get(brand.lower(), [brand])
+            for b in possible_brands:
+                rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=b, member_tier__iexact=tier).first()
+                if rate:
+                    break
+
+        # 2. Fallback to general member tier in PackagePrice if specific tier not found
+        if not rate and tier != 'general':
+            possible_brands = [brand] + alias_map.get(brand.lower(), [])
+            for b in possible_brands:
+                rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=b, member_tier='general').first()
+                if rate:
+                    break
+
+        # 3. Fallback to BrandPricing master table
+        found_bp_price = None
+        if not rate:
+            possible_brands = [brand] + alias_map.get(brand.lower(), [])
+            bp = None
+            for b in possible_brands:
+                bp = BrandPricing.objects.filter(category__iexact=category, brand__iexact=b).first()
+                if bp:
+                    break
+            if not bp:
+                for b in possible_brands:
+                    bp = BrandPricing.objects.filter(brand__iexact=b).first()
+                    if bp:
+                        break
+
+            if bp:
+                if tier in ('silver', '5pct'):
+                    base_amt = bp.price_5pct
+                elif tier in ('gold', 'platinum', '15pct'):
+                    base_amt = bp.price_15pct
+                elif tier in ('partner', 'corporate'):
+                    base_amt = bp.partner_price
+                else:
+                    base_amt = bp.base_price
+
+                if package.code == 'cert_90d':
+                    found_bp_price = Decimal(str(base_amt)) + Decimal('500.00')
+                else:
+                    found_bp_price = Decimal(str(base_amt))
 
         if rate:
             amount = rate.amount
+        elif found_bp_price is not None:
+            amount = found_bp_price
         elif allow_missing_price and data.get('manual_service_amount') is not None:
             if not str(data.get('price_reason', '')).strip():
                 raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
             amount = money(data['manual_service_amount'])
         else:
-            raise ValidationError('ยังไม่มีราคาแพ็กเกจสำหรับแบรนด์และหมวดหมู่นี้')
+            # 4. Default Category Fallback for custom/unlisted brands
+            default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1200.00')
+            if tier in ('silver', '5pct'):
+                default_base = money(default_base * Decimal('0.95'))
+            elif tier in ('gold', 'platinum', '15pct'):
+                default_base = money(default_base * Decimal('0.85'))
+            elif tier in ('partner', 'corporate'):
+                default_base = money(default_base * Decimal('0.75'))
+
+            if package.code == 'cert_90d':
+                amount = default_base + Decimal('500.00')
+            else:
+                amount = default_base
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')
