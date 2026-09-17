@@ -89,16 +89,12 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.setFont(FONT_BOLD, 18)
     c.setFillColorRGB(0.08, 0.08, 0.08)
     logo_path = os.path.join(settings.BASE_DIR, 'assets', 'logo-trust-lab.png')
-    c.drawImage(logo_path, width / 2 - 25, height - 70, width=50, height=50, preserveAspectRatio=True, anchor='c', mask='auto')
-    
-    c.setFont(FONT_REGULAR, 7)
-    c.setFillColorRGB(0.4, 0.4, 0.4)
-    # Adding thin spacing for tracking effect
-
+    if os.path.exists(logo_path):
+        c.drawImage(logo_path, width / 2 - 32, height - 74, width=64, height=54, preserveAspectRatio=True, anchor='c', mask='auto')
     
     c.setFont(FONT_REGULAR, 6)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawCentredString(width / 2.0, height - 80, "VERIFY   ·   INSPECT   ·   ASSURE")
+    c.drawCentredString(width / 2.0, height - 82, "VERIFY   ·   INSPECT   ·   ASSURE")
     
     c.setStrokeColorRGB(0.9, 0.9, 0.9)
     c.setLineWidth(0.5)
@@ -142,35 +138,54 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     sub_bp2 = selected_bps[2] if len(selected_bps) > 2 else None
     
     # 4. Left Column: Result & Product Images
-    # "AUTHENTIC" Label & Checkmark icon
-    c.saveState()
-    c.setFillColorRGB(0.06, 0.46, 0.25)  # Green color
-    # Draw Circle
-    c.circle(50, height - 175, 8, fill=True, stroke=False)
-    # Draw white checkmark inside circle
-    c.setStrokeColorRGB(1.0, 1.0, 1.0)
-    c.setLineWidth(1.5)
-    p = c.beginPath()
-    p.moveTo(47, height - 176)
-    p.lineTo(49.5, height - 179.5)
-    p.lineTo(54, height - 172.5)
-    c.drawPath(p, fill=False, stroke=True)
+    job = certificate.job
+    is_authentic = (getattr(job, 'result', '') == 'authentic')
     
-    # Text "AUTHENTIC"
-    c.setFont(FONT_BOLD, 12.5)
-    c.drawString(64, height - 179, "AUTHENTIC")
+    c.saveState()
+    if is_authentic:
+        c.setFillColorRGB(0.06, 0.46, 0.25)  # Green color
+        c.circle(50, height - 175, 8, fill=True, stroke=False)
+        c.setStrokeColorRGB(1.0, 1.0, 1.0)
+        c.setLineWidth(1.5)
+        p = c.beginPath()
+        p.moveTo(47, height - 176)
+        p.lineTo(49.5, height - 179.5)
+        p.lineTo(54, height - 172.5)
+        c.drawPath(p, fill=False, stroke=True)
+        
+        c.setFont(FONT_BOLD, 12.5)
+        c.drawString(64, height - 179, "AUTHENTIC")
+    else:
+        c.setFillColorRGB(0.85, 0.15, 0.15)  # Red color
+        c.circle(50, height - 175, 8, fill=True, stroke=False)
+        c.setStrokeColorRGB(1.0, 1.0, 1.0)
+        c.setLineWidth(1.5)
+        c.line(46, height - 179, 54, height - 171)
+        c.line(46, height - 171, 54, height - 179)
+        
+        c.setFont(FONT_BOLD, 12.5)
+        c.drawString(64, height - 179, "UNAUTHENTIC / FAIL")
     c.restoreState()
     
     # Large Product Main Image Box
     draw_safe_image(c, main_bp, 40, height - 370, 240, 180)
+    
+    # Stamp fail overlay across image if unauthentic
+    if not is_authentic:
+        c.saveState()
+        c.setFillColorRGB(0.85, 0.15, 0.15)
+        c.setFillAlpha(0.2)
+        c.setFont(FONT_BOLD, 28)
+        c.translate(160, height - 280)
+        c.rotate(-25)
+        c.drawCentredString(0, 0, "UNAUTHENTIC")
+        c.restoreState()
     
     # Two Thumbnail Sub Images Box
     draw_safe_image(c, sub_bp1, 40, height - 465, 115, 85)
     draw_safe_image(c, sub_bp2, 165, height - 465, 115, 85)
     
     # 5. Right Column: Specifications and QR Code
-    job = certificate.job
-    # Maps category to friendly EN name
     cat_friendly = {
         'Bag': 'Luxury Handbag',
         'Watch': 'Luxury Timepiece',
@@ -180,7 +195,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     }.get(job.category, job.category or "Luxury Handbag")
     
     # Format issue date
-    issue_date = timezone.localtime(certificate.created_at).strftime("%d %B %Y").upper()
+    issue_date = timezone.localtime(certificate.created_at).strftime("%d %b %Y").upper()
     serial_val = getattr(job, 'serial_number', '') or getattr(certificate, 'serial_number', '') or '-'
     
     # Draw Specifications Table
@@ -190,7 +205,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         ("CERTIFICATE ID", certificate.cert_code or f"TL-{certificate.id}"),
         ("BRAND", job.brand.upper()),
         ("MODEL", job.model.upper()),
-        ("SERIAL NO.", str(serial_val).upper()),
+        ("SERIAL NUMBER", str(serial_val).upper()),
         ("CATEGORY", cat_friendly.upper()),
         ("INSPECTION DATE", issue_date)
     ]
@@ -252,7 +267,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawString(410, verify_y + 55, "OR VISIT")
     c.setFont(FONT_BOLD, 7)
     c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(410, verify_y + 46, "www.trustlabthailand.com/verify")
+    c.drawString(410, verify_y + 46, "trustlabthailand.com/verify")
     
     # Certificate ID pill (solid black background with white text)
     c.setFillColorRGB(0.08, 0.08, 0.08)
@@ -263,72 +278,22 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawCentredString(410 + 62.5, verify_y + 24, certificate.cert_code or f"TL-{certificate.id}")
     c.restoreState()
     
-    # 6. Authentication Standard Section
-    standard_y = height - 515
-    c.saveState()
-    c.setStrokeColorRGB(0.9, 0.9, 0.9)
-    c.setLineWidth(0.5)
-    c.line(40, standard_y, width - 40, standard_y)
-    
-    c.setFont(FONT_BOLD, 7.5)
-    c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawCentredString(width / 2.0, standard_y - 18, "A U T H E N T I C A T I O N   S T A N D A R D")
-    
-    # Three columns under standard
-    col_w = (width - 80) / 3.0
-    col1_x = 40
-    col2_x = 40 + col_w
-    col3_x = 40 + col_w * 2.0
-    col_y = standard_y - 50
-    
-    # Col 1: checkmark badge
-    c.circle(col1_x + 20, col_y + 15, 8, fill=False, stroke=True)
-    c.setFont(FONT_BOLD, 7.5)
-    c.drawString(col1_x + 35, col_y + 16, "100+ Checkpoints")
-    c.setFont(FONT_REGULAR, 6)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(col1_x + 35, col_y + 7, "Authentication checkpoints")
-    
-    # Col 2: search badge
-    c.circle(col2_x + 20, col_y + 15, 8, fill=False, stroke=True)
-    c.setFont(FONT_BOLD, 7.5)
-    c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(col2_x + 35, col_y + 16, "Professional Process")
-    c.setFont(FONT_REGULAR, 6)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(col2_x + 35, col_y + 7, "Expert verification process")
-    
-    # Col 3: lab badge
-    c.circle(col3_x + 20, col_y + 15, 8, fill=False, stroke=True)
-    c.setFont(FONT_BOLD, 7.5)
-    c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(col3_x + 35, col_y + 16, "Lab Standard")
-    c.setFont(FONT_REGULAR, 6)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(col3_x + 35, col_y + 7, "Laboratory inspection standard")
-    c.restoreState()
-    
-    # 7. Validity Cards Section
-    cards_y = height - 655
+    # 6. Validity Cards Section
+    cards_y = height - 565
     c.saveState()
     
-    # Determine validity duration based on job service_package (15 days vs 90 days)
+    # Determine validity duration based on job service_package (15 days vs 90 days / 3 months)
     pkg = getattr(job, 'service_package', '') or ''
-    if '15d' in pkg or '15' in pkg:
-        val_days = 15
-        val_title = "VALID FOR 15 DAYS"
-        val_sub = "This certificate is valid for 15 days from issuance date."
+    val_days = getattr(certificate, 'validity_days', 90) or 90
+    if val_days == 90 or (not certificate.validity_days and '15' not in pkg):
+        val_title = "VALID FOR 3 MONTHS"
+        val_sub = "This certificate is valid for 3 months from the inspection date."
     else:
-        val_days = 90
-        val_title = "VALID FOR 90 DAYS (3 MONTHS)"
-        val_sub = "This certificate is valid for 90 days from issuance date."
-
-    if certificate.validity_days:
-        val_days = certificate.validity_days
         val_title = f"VALID FOR {val_days} DAYS"
-        val_sub = f"Valid for {val_days} days from issuance."
+        val_sub = f"This certificate is valid for {val_days} days from the inspection date."
+
     expire_dt = timezone.localtime(certificate.expires_at).date() if certificate.expires_at else timezone.localtime(certificate.created_at).date() + datetime.timedelta(days=val_days)
-    expiry_date_str = expire_dt.strftime("%d %B %Y").upper()
+    expiry_date_str = expire_dt.strftime("%d %b %Y").upper()
 
     # Left Card: Validity Duration
     c.setFillColorRGB(0.98, 0.98, 0.98)
@@ -337,63 +302,63 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.setLineWidth(0.5)
     c.rect(40, cards_y, 240, 68, fill=False, stroke=True)
     
-    c.setFont(FONT_BOLD, 8)
+    c.setFont(FONT_BOLD, 8.5)
     c.setFillColorRGB(0.08, 0.08, 0.08)
     c.drawString(55, cards_y + 44, val_title)
     c.setFont(FONT_REGULAR, 6.5)
     c.setFillColorRGB(0.45, 0.45, 0.45)
-    c.drawString(55, cards_y + 28, val_sub)
-    c.drawString(55, cards_y + 17, "Re-inspection required after expiration.")
+    c.drawString(55, cards_y + 26, val_sub)
     
     # Right Card: Valid Until Date
     c.setFillColorRGB(0.98, 0.98, 0.98)
     c.rect(315, cards_y, 240, 68, fill=True, stroke=False)
+    c.setStrokeColorRGB(0.9, 0.9, 0.9)
+    c.setLineWidth(0.5)
     c.rect(315, cards_y, 240, 68, fill=False, stroke=True)
     
     c.setFont(FONT_BOLD, 6.5)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(330, cards_y + 48, "EXPIRATION DATE")
+    c.drawString(330, cards_y + 48, "VALID UNTIL")
     c.setFont(FONT_BOLD, 13.5)
     c.setFillColorRGB(0.08, 0.08, 0.08)
     c.drawString(330, cards_y + 30, expiry_date_str)
     c.setFont(FONT_REGULAR, 5.5)
     c.setFillColorRGB(0.5, 0.5, 0.5)
-    c.drawString(330, cards_y + 17, "(ONLINE VERIFICATION AT TRUSTLABTHAILAND.COM)")
+    c.drawString(330, cards_y + 17, "(ONLINE VERIFICATION)")
     c.restoreState()
     
-    # 8. Important Notice & Footer Notes
+    # 7. Important Notice & Footer Notes
     notice_y = cards_y - 20
     c.saveState()
-    c.setFont(FONT_BOLD, 6)
-    c.setFillColorRGB(0.2, 0.2, 0.2)
+    c.setFont(FONT_BOLD, 6.5)
+    c.setFillColorRGB(0.15, 0.15, 0.15)
     c.drawString(40, notice_y, "IMPORTANT NOTICE")
     
     c.setFont(FONT_REGULAR, 5.5)
-    c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.setFillColorRGB(0.45, 0.45, 0.45)
     bullets = [
         "This result is based on visual and laboratory inspection using current data and available reference standards.",
         "Results do not guarantee identification of all modifications, repairs, or replaced parts.",
         "This certificate confirms the authenticity of the item examined by TRUST LAB THAILAND based on the standard inspection process.",
         "This certificate does not represent a guarantee of the item or any affiliated brand."
     ]
-    if settings.CERTIFICATE_NOTICE:
-        import textwrap
-        bullets = textwrap.wrap(settings.CERTIFICATE_NOTICE, width=115)
-        if len(bullets) > 5:
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError('ข้อความ Important Notice ยาวเกินพื้นที่ใบรับรอง กรุณาปรับรูปแบบก่อนเผยแพร่')
     for idx, bullet in enumerate(bullets):
-        c.drawString(40, notice_y - 10 - (idx * 8), f"·  {bullet}")
+        c.drawString(40, notice_y - 10 - (idx * 9), f"•  {bullet}")
         
-    # Footer Links & Tiny verification indicator
-    c.drawString(40, 42, "Website")
-    c.linkURL(settings.PUBLIC_SITE_URL, (40, 38, 150, 50), relative=0)
-    if settings.INSTAGRAM_URL:
-        c.drawString(180, 42, "Instagram")
-        c.linkURL(settings.INSTAGRAM_URL, (180, 38, 290, 50), relative=0)
-    if settings.LINE_OFFICIAL_URL:
-        c.drawString(320, 42, "LINE Official")
-        c.linkURL(settings.LINE_OFFICIAL_URL, (320, 38, 420, 50), relative=0)
+    # Footer Links (Clickable URL hotspots)
+    c.setFont(FONT_REGULAR, 6)
+    c.setFillColorRGB(0.2, 0.2, 0.2)
+    
+    c.drawString(40, 36, "www.trustlabthailand.com")
+    c.linkURL("https://trustlabthailand.com", (40, 30, 170, 46), relative=0)
+    
+    c.drawString(200, 36, "IG : trustlab.thailand")
+    c.linkURL("https://instagram.com/trustlab.thailand", (200, 30, 310, 46), relative=0)
+    
+    c.drawString(340, 36, "Line: @trustlab")
+    c.linkURL("https://line.me/R/ti/p/@trustlab", (340, 30, 430, 46), relative=0)
+    
+    c.restoreState()
     
     # Draw small bottom right QR code
     c.setFont(FONT_REGULAR, 5.5)
