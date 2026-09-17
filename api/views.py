@@ -944,18 +944,80 @@ def public_booking_availability(request):
     return Response(slots, status=status.HTTP_200_OK)
 
 
-@api_view(['POST'])
+def num_to_thai_baht(number) -> str:
+    """Converts numeric amount to official Thai Baht text representation."""
+    try:
+        amount = float(number)
+    except (ValueError, TypeError):
+        return ""
+
+    if amount == 0:
+        return "(ศูนย์บาทถ้วน)"
+
+    digits = ["ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"]
+    units = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน", "ล้าน"]
+
+    baht_part = int(abs(amount))
+    satang_part = int(round((abs(amount) - baht_part) * 100))
+
+    def convert_group(n):
+        if n == 0:
+            return ""
+        s = str(n)
+        length = len(s)
+        res = []
+        for i, ch in enumerate(s):
+            digit = int(ch)
+            idx = length - i - 1
+            if digit != 0:
+                if idx == 0 and digit == 1 and length > 1:
+                    res.append("เอ็ด")
+                elif idx == 1 and digit == 1:
+                    res.append("สิบ")
+                elif idx == 1 and digit == 2:
+                    res.append("ยี่สิบ")
+                else:
+                    res.append(digits[digit] + units[idx])
+        return "".join(res)
+
+    def convert_int(n):
+        if n == 0:
+            return "ศูนย์"
+        result = ""
+        millions_groups = []
+        while n > 0:
+            millions_groups.append(n % 1000000)
+            n //= 1000000
+        for i, group in enumerate(millions_groups):
+            group_str = convert_group(group)
+            if group_str:
+                if i > 0:
+                    group_str += "ล้าน" * i
+                result = group_str + result
+        return result
+
+    prefix = "ลบ" if amount < 0 else ""
+    baht_text = convert_int(baht_part) + "บาท"
+
+    if satang_part == 0:
+        satang_text = "ถ้วน"
+    else:
+        satang_text = convert_group(satang_part) + "สตางค์"
+
+    return f"({prefix}{baht_text}{satang_text})"
+
+
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def public_invoice_preview(request):
     """
-    Renders an HTML invoice or cashier slip from a JSON payload POSTed via form.
-    Accepts: form field `data` = JSON string with invoice details.
-    Returns: HTML page with auto-print trigger.
+    Renders official Tax Invoice or Receipt from JSON payload POSTed or passed via GET.
+    Supports POS Abbreviated Slip (80mm) and Full Tax Invoice A4 (Original & Copy 2 sets).
     """
     import json as _json
 
     is_slip = request.GET.get('slip') == '1'
-    raw = request.POST.get('data') or request.data.get('data') or '{}'
+    raw = request.POST.get('data') or request.data.get('data') or request.GET.get('data') or '{}'
     try:
         d = _json.loads(raw)
     except Exception:
@@ -964,211 +1026,360 @@ def public_invoice_preview(request):
     customer = d.get('customerData', {})
     product = d.get('productData', {})
     items = d.get('items', [])
-    total_cost = d.get('totalCost', 0)
+    total_cost = float(d.get('totalCost', 0))
+    discount = float(d.get('discount', 0))
     payment_method = d.get('paymentMethod', 'cash')
     payment_status = d.get('paymentStatus', 'paid')
     job_id = d.get('jobId', '')
     queue_no = d.get('queueNo', '')
     expert_note = d.get('expertNote', '')
-    express = d.get('expressService', False)
+    seller_name = d.get('sellerName', 'Trust Lab')
+    ref_qt = d.get('refQt', f"QT{datetime.datetime.now().strftime('%Y%m%d')}")
+    credit_days = d.get('creditDays', '-')
+    due_date_str = d.get('dueDate', '-')
 
     now = datetime.datetime.now()
     date_str = now.strftime('%d/%m/%Y')
     time_str = now.strftime('%H:%M')
 
     cname = customer.get('name', '-')
+    caddress = customer.get('address', '-')
+    ctax_id = customer.get('taxId', '-')
+    ccontact = customer.get('contactPerson', cname)
     cphone = customer.get('phone', '-')
+    cemail = customer.get('email', '-')
     cmembership = customer.get('type', 'General')
+
     pbrand = product.get('brand', '-')
     pmodel = product.get('model', '-')
     pcategory = product.get('category', '-')
-    pcolor = product.get('color', '-')
     pserial = product.get('serialNumber', '-')
 
-    payment_label = {'cash': 'เงินสด', 'transfer': 'โอนเงิน', 'card': 'บัตรเครดิต'}.get(payment_method, payment_method)
-    status_label = '✓ ชำระแล้ว' if payment_status == 'paid' else '⏳ ค้างชำระ'
-    status_color = '#16a34a' if payment_status == 'paid' else '#dc2626'
+    payment_label = {'cash': 'เงินสด', 'transfer': 'โอนเงิน', 'card': 'บัตรเครดิต', 'promptpay': 'PromptPay QR'}.get(payment_method, payment_method)
 
-    items_html = ''
-    for item in items:
-        if not item:
-            continue
-        name = item.get('name', '')
-        amount = item.get('amount', 0)
-        color = '#16a34a' if amount < 0 else '#111827'
-        sign = '' if amount < 0 else ''
-        items_html += f'''
-        <tr>
-          <td style="padding:6px 0;font-size:12px;color:#374151;">{name}</td>
-          <td style="padding:6px 0;font-size:12px;color:{color};text-align:right;font-weight:700;">{sign}฿{abs(amount):,.0f}</td>
-        </tr>'''
+    # Calculate Tax Amounts (7% VAT)
+    subtotal = total_cost + discount
+    after_discount = total_cost
+    vat_amount = round(after_discount * 7.0 / 107.0, 2)
+    before_vat = round(after_discount - vat_amount, 2)
 
-    ref_no = f"TL-{now.strftime('%Y%m%d')}-{job_id or queue_no or '????'}"
+    baht_text = num_to_thai_baht(total_cost)
+    doc_inv_no = f"INV{now.strftime('%Y%m')}{job_id or queue_no or '0001'}"
+    doc_rc_no = f"RC{now.strftime('%Y%m')}{job_id or queue_no or '0001'}"
+
+    # Master Company Data
+    COMP_NAME = "บริษัท เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น (ไทยแลนด์) จำกัด (สำนักงานใหญ่)"
+    COMP_ADDR = "388 อาคารสยามสแควร์วัน ห้อง MS1107 ชั้น 1 ถนนพระราม 1 แขวงปทุมวัน เขตปทุมวัน กรุงเทพมหานคร 10330"
+    COMP_TAX_ID = "0105569150179"
+    COMP_TEL = "( รออัพเดทเบอร์ร้าน )"
 
     if is_slip:
-        # ── CASHIER SLIP (narrow 80mm style) ─────────────────────────────
+        # ── ABBREVIATED TAX INVOICE / RECEIPT (80mm POS Slip) ───────────
+        items_rows = ""
+        for i, item in enumerate(items, 1):
+            if not item:
+                continue
+            name = item.get('name', 'บริการตรวจสอบสินค้า')
+            qty = item.get('quantity', 1)
+            price = float(item.get('price', item.get('amount', 0)))
+            amt = float(item.get('amount', price * qty))
+            items_rows += f"""
+            <div style="display:flex;justify-content:space-between;margin:3px 0;">
+              <span>{name}</span>
+              <span>{qty} x ฿{price:,.2f}</span>
+              <span style="font-weight:700;">฿{amt:,.2f}</span>
+            </div>"""
+
+        if not items_rows:
+            items_rows = f"""
+            <div style="display:flex;justify-content:space-between;margin:3px 0;">
+              <span>ตรวจสอบสินค้า ({pbrand} {pmodel})</span>
+              <span>1</span>
+              <span style="font-weight:700;">฿{total_cost:,.2f}</span>
+            </div>"""
+
         html = f"""<!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<title>สลิปใบเสร็จ - TrustLab</title>
+<title>ใบกำกับภาษีอย่างย่อ / ใบเสร็จรับเงิน - Trust Lab</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;600;700&display=swap');
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{ font-family:'IBM Plex Sans Thai',sans-serif; font-size:11px; background:#fff; width:302px; margin:0 auto; padding:12px; color:#111; }}
   .center {{ text-align:center; }}
-  .logo {{ font-size:18px; font-weight:700; letter-spacing:3px; }}
+  .logo-text {{ font-size:16px; font-weight:800; letter-spacing:2px; }}
   .sep {{ border-top:1px dashed #aaa; margin:8px 0; }}
   .row {{ display:flex; justify-content:space-between; margin:3px 0; }}
   .label {{ color:#555; }}
-  .total-row {{ display:flex; justify-content:space-between; margin:4px 0; font-size:15px; font-weight:700; border-top:1px solid #000; padding-top:6px; margin-top:6px; }}
-  .status {{ font-size:11px; font-weight:700; color:{status_color}; }}
-  .footer {{ font-size:9px; color:#888; text-align:center; margin-top:10px; }}
+  .total-bar {{ background:#111; color:#fff; padding:6px 8px; font-size:13px; font-weight:700; display:flex; justify-content:space-between; margin-top:8px; border-radius:4px; }}
+  .footer {{ font-size:9px; color:#666; text-align:center; margin-top:12px; }}
   @media print {{ @page {{ margin:0; size:80mm auto; }} body {{ padding:4px; }} }}
 </style>
 </head>
 <body>
 <div class="center">
-  <div class="logo">TRUSTLAB</div>
-  <div style="font-size:9px;color:#888;">ใบเสร็จรับเงิน / Receipt</div>
-  <div style="font-size:9px;color:#888;">{date_str} {time_str}</div>
+  <img src="/logo-trust-lab.png" alt="Trust Lab" style="height:32px;margin-bottom:4px;" />
+  <div class="logo-text">TRUST LAB THAILAND</div>
+  <div style="font-size:8.5px;color:#444;line-height:1.3;margin-top:4px;">
+    {COMP_NAME}<br>
+    {COMP_ADDR}<br>
+    เลขประจำตัวผู้เสียภาษี {COMP_TAX_ID}<br>
+    โทร. {COMP_TEL}
+  </div>
 </div>
 <div class="sep"></div>
-<div class="row"><span class="label">เลขที่:</span><span style="font-weight:700">{ref_no}</span></div>
-<div class="row"><span class="label">คิวที่:</span><span style="font-weight:700">{queue_no or '-'}</span></div>
-<div class="row"><span class="label">ลูกค้า:</span><span>{cname}</span></div>
-<div class="row"><span class="label">ระดับ:</span><span>{cmembership}</span></div>
+<div class="center" style="font-size:12px;font-weight:700;margin:4px 0;">ใบกำกับภาษีอย่างย่อ / ใบเสร็จรับเงิน</div>
+<div class="row"><span class="label">เลขที่:</span><span style="font-weight:700;">{doc_rc_no}</span></div>
+<div class="row"><span class="label">วันที่:</span><span>{date_str} {time_str}</span></div>
+<div class="row"><span class="label">พนักงานขาย:</span><span>{seller_name}</span></div>
 <div class="sep"></div>
-<div class="row"><span class="label">สินค้า:</span><span style="font-weight:700">{pbrand} {pmodel}</span></div>
-<div class="row"><span class="label">ประเภท:</span><span>{pcategory}</span></div>
-{'<div class="row"><span class="label">S/N:</span><span>' + pserial + '</span></div>' if pserial and pserial != '-' else ''}
+<div class="row" style="font-weight:700;border-bottom:1px solid #ddd;padding-bottom:2px;">
+  <span>รายการ</span><span>จำนวน</span><span>รวม</span>
+</div>
+{items_rows}
 <div class="sep"></div>
-{''.join([f'<div class="row"><span>{i.get("name","")}</span><span style="font-weight:700">฿{abs(i.get("amount",0)):,.0f}</span></div>' for i in items if i])}
-<div class="total-row"><span>รวมทั้งสิ้น</span><span>฿{total_cost:,.0f}</span></div>
-<div class="row"><span class="label">ชำระโดย:</span><span>{payment_label}</span></div>
-<div class="row"><span class="label">สถานะ:</span><span class="status">{status_label}</span></div>
-{'<div class="sep"></div><div style="font-size:10px;color:#555;">หมายเหตุ: ' + expert_note + '</div>' if expert_note else ''}
+<div class="row"><span class="label">รวมเป็นเงิน:</span><span>฿{subtotal:,.2f}</span></div>
+<div class="row"><span class="label">ส่วนลด:</span><span>฿{discount:,.2f}</span></div>
+<div class="row"><span class="label">จำนวนเงินหลังหักส่วนลด:</span><span>฿{after_discount:,.2f}</span></div>
+<div class="row"><span class="label">ภาษีมูลค่าเพิ่ม 7%:</span><span>฿{vat_amount:,.2f}</span></div>
+
+<div class="total-bar">
+  <span>รวมทั้งสิ้น</span>
+  <span>฿{total_cost:,.2f}</span>
+</div>
+
 <div class="sep"></div>
-<div class="footer">ขอบคุณที่ใช้บริการ TrustLab<br>trustlabthailand.com | @TrustLab</div>
+<div class="footer">
+  ขอบคุณที่ใช้บริการ<br>
+  THANK YOU
+</div>
 <script>window.onload = () => setTimeout(() => window.print(), 400);</script>
 </body>
 </html>"""
     else:
-        # ── FULL INVOICE (A4) ─────────────────────────────────────────────
+        # ── FULL TAX INVOICE A4 (Original & Copy 2 Sets) ─────────────────
+        def render_a4_page(set_type_title, set_type_en):
+            item_rows_a4 = ""
+            if items:
+                for idx, it in enumerate(items, 1):
+                    if not it:
+                        continue
+                    iname = it.get('name', 'ตรวจสอบสินค้า')
+                    iqty = it.get('quantity', 1)
+                    iprice = float(it.get('price', it.get('amount', 0)))
+                    idisc = float(it.get('discount', 0))
+                    iamt = float(it.get('amount', iprice * iqty - idisc))
+                    item_rows_a4 += f"""
+                    <tr>
+                      <td style="text-align:center;">{idx}</td>
+                      <td>{iname} ({pbrand} {pmodel})</td>
+                      <td style="text-align:center;">{iqty}</td>
+                      <td style="text-align:right;">{iprice:,.2f}</td>
+                      <td style="text-align:right;">{idisc:,.2f}</td>
+                      <td style="text-align:right;font-weight:700;">{iamt:,.2f}</td>
+                    </tr>"""
+            else:
+                item_rows_a4 = f"""
+                <tr>
+                  <td style="text-align:center;">1</td>
+                  <td>บริการตรวจสอบสินค้า Luxury Product ({pbrand} {pmodel})</td>
+                  <td style="text-align:center;">1</td>
+                  <td style="text-align:right;">{subtotal:,.2f}</td>
+                  <td style="text-align:right;">{discount:,.2f}</td>
+                  <td style="text-align:right;font-weight:700;">{total_cost:,.2f}</td>
+                </tr>"""
+
+            return f"""
+            <div class="page">
+              <!-- Top Right Triangle Corner Banner -->
+              <div class="top-corner"></div>
+
+              <!-- Header Section -->
+              <div class="header">
+                <div class="company-brand">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <img src="/logo-trust-lab.png" alt="Logo" style="height:38px;" />
+                    <div>
+                      <div class="brand-title">TRUST LAB</div>
+                      <div class="brand-slogan">VERIFY · INSPECT · ASSURE</div>
+                    </div>
+                  </div>
+                  <div class="company-details">
+                    <strong>{COMP_NAME}</strong><br>
+                    {COMP_ADDR}<br>
+                    เลขประจำตัวผู้เสียภาษี {COMP_TAX_ID}<br>
+                    โทร. {COMP_TEL}
+                  </div>
+                </div>
+
+                <div class="invoice-title-block">
+                  <div class="inv-main-title">ใบกำกับภาษี</div>
+                  <div class="inv-sub-title">{set_type_title}</div>
+                  <div class="inv-en-title">TAX INVOICE ({set_type_en})</div>
+
+                  <table class="doc-meta-table">
+                    <tr><td>เลขที่</td><td>: {doc_inv_no}</td></tr>
+                    <tr><td>วันที่</td><td>: {date_str}</td></tr>
+                    <tr><td>เครดิต</td><td>: {credit_days}</td></tr>
+                    <tr><td>ครบกำหนด</td><td>: {due_date_str}</td></tr>
+                    <tr><td>ผู้ขาย</td><td>: {seller_name}</td></tr>
+                    <tr><td>อ้างอิง</td><td>: {ref_qt}</td></tr>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Customer Info Section -->
+              <div class="customer-box">
+                <div style="flex:1.2;">
+                  <div class="cust-label">ลูกค้า</div>
+                  <div class="cust-name">{cname}</div>
+                  <div class="cust-info">{caddress}</div>
+                  <div class="cust-info" style="margin-top:4px;"><strong>เลขประจำตัวผู้เสียภาษี:</strong> {ctax_id}</div>
+                </div>
+                <div style="flex:0.8;border-left:1px solid #e5e7eb;padding-left:16px;">
+                  <div class="cust-info"><strong>ชื่อผู้ติดต่อ:</strong> {ccontact}</div>
+                  <div class="cust-info"><strong>เบอร์โทร:</strong> {cphone}</div>
+                  <div class="cust-info"><strong>อีเมล:</strong> {cemail}</div>
+                </div>
+              </div>
+
+              <!-- Items Table -->
+              <table class="items-table">
+                <thead>
+                  <tr>
+                    <th style="width:40px;text-align:center;">#</th>
+                    <th style="text-align:left;">รายละเอียด</th>
+                    <th style="width:60px;text-align:center;">จำนวน</th>
+                    <th style="width:100px;text-align:right;">ราคาต่อหน่วย</th>
+                    <th style="width:90px;text-align:right;">ส่วนลด</th>
+                    <th style="width:110px;text-align:right;">มูลค่า</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {item_rows_a4}
+                </tbody>
+              </table>
+
+              <!-- Summary & Baht Text Section -->
+              <div class="summary-wrapper">
+                <div class="baht-text-box">
+                  <div class="baht-text">{baht_text}</div>
+                  <div class="note-box">
+                    <strong>หมายเหตุ:</strong> {expert_note or '-'}
+                  </div>
+                </div>
+
+                <table class="calc-table">
+                  <tr><td>รวมเป็นเงิน</td><td style="text-align:right;">{subtotal:,.2f} บาท</td></tr>
+                  <tr><td>ส่วนลด</td><td style="text-align:right;">{discount:,.2f} บาท</td></tr>
+                  <tr><td>จำนวนเงินหลังหักส่วนลด</td><td style="text-align:right;">{after_discount:,.2f} บาท</td></tr>
+                  <tr><td>ภาษีมูลค่าเพิ่ม 7%</td><td style="text-align:right;">{vat_amount:,.2f} บาท</td></tr>
+                  <tr><td>ราคาไม่รวมภาษีมูลค่าเพิ่ม</td><td style="text-align:right;">{before_vat:,.2f} บาท</td></tr>
+                  <tr class="grand-total-row">
+                    <td>จำนวนเงินรวมทั้งสิ้น</td>
+                    <td style="text-align:right;">{total_cost:,.2f} บาท</td>
+                  </tr>
+                </table>
+              </div>
+
+              <!-- Signatures Footer -->
+              <div class="signatures-wrapper">
+                <div class="sig-box">
+                  <div class="sig-line"></div>
+                  <div class="sig-label">ผู้จัดทำ (ผู้รับสินค้า / บริการ)</div>
+                  <div class="sig-date">วันที่ ..... / ..... / ..........</div>
+                </div>
+
+                <div class="thank-box">
+                  ขอบคุณที่ใช้บริการ<br>
+                  <span>THANK YOU</span>
+                </div>
+
+                <div class="sig-box">
+                  <div class="sig-line"></div>
+                  <div class="sig-label">ผู้อนุมัติ</div>
+                  <div class="sig-date">วันที่ ..... / ..... / ..........</div>
+                </div>
+              </div>
+
+              <div class="bottom-watermark">
+                TRUST LAB THAILAND · VERIFY · INSPECT · ASSURE
+              </div>
+            </div>"""
+
+        html_original = render_a4_page("ต้นฉบับ", "ORIGINAL")
+        html_copy = render_a4_page("คู่ฉบับ", "COPY")
+
         html = f"""<!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8">
-<title>ใบแจ้งหนี้ {ref_no} - TrustLab</title>
+<title>ใบกำกับภาษี {doc_inv_no} - Trust Lab</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;600;700;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700;800&display=swap');
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family:'IBM Plex Sans Thai',sans-serif; background:#f5f5f5; color:#111827; }}
-  .page {{ background:#fff; max-width:794px; margin:0 auto; padding:56px 64px; min-height:1123px; }}
-  .header {{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:40px; }}
-  .brand {{ font-size:26px; font-weight:800; letter-spacing:4px; }}
-  .brand-sub {{ font-size:9px; color:#9ca3af; letter-spacing:2px; margin-top:2px; }}
-  .invoice-label {{ text-align:right; }}
-  .invoice-label h2 {{ font-size:20px; font-weight:800; color:#111; letter-spacing:2px; }}
-  .invoice-label .ref {{ font-size:11px; color:#6b7280; margin-top:4px; }}
-  .meta-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:32px; padding:24px; background:#f9fafb; border-radius:12px; border:1px solid #e5e7eb; }}
-  .meta-block .meta-title {{ font-size:9px; font-weight:700; color:#9ca3af; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:8px; }}
-  .meta-block p {{ font-size:12px; color:#374151; line-height:1.7; }}
-  .meta-block p strong {{ color:#111827; font-weight:700; }}
-  table {{ width:100%; border-collapse:collapse; margin-bottom:20px; }}
-  thead tr {{ background:#111827; color:#fff; }}
-  thead th {{ padding:12px 16px; font-size:10px; font-weight:700; letter-spacing:1px; text-transform:uppercase; }}
-  thead th:last-child {{ text-align:right; }}
-  tbody tr {{ border-bottom:1px solid #f3f4f6; }}
-  tbody td {{ padding:12px 16px; font-size:12px; color:#374151; }}
-  tbody td:last-child {{ text-align:right; font-weight:700; color:#111827; }}
-  .total-block {{ display:flex; justify-content:flex-end; }}
-  .total-table {{ width:280px; }}
-  .total-table td {{ padding:6px 0; font-size:12px; color:#6b7280; }}
-  .total-table td:last-child {{ text-align:right; color:#111827; font-weight:600; }}
-  .total-table .grand {{ font-size:16px; font-weight:800; color:#111827; border-top:2px solid #111827; padding-top:10px; }}
-  .status-badge {{ display:inline-block; padding:4px 12px; border-radius:999px; font-size:10px; font-weight:700; letter-spacing:1px; background:{'#dcfce7' if payment_status == 'paid' else '#fee2e2'}; color:{status_color}; }}
-  .note-block {{ margin-top:28px; padding:16px 20px; background:#fffbeb; border-left:3px solid #f59e0b; border-radius:0 8px 8px 0; font-size:11px; color:#92400e; }}
-  .footer-bar {{ margin-top:40px; padding-top:20px; border-top:1px solid #e5e7eb; display:flex; justify-content:space-between; align-items:center; }}
-  .footer-bar .company {{ font-size:10px; color:#9ca3af; }}
+  body {{ font-family:'IBM Plex Sans Thai',sans-serif; background:#e5e7eb; color:#111827; -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+  
+  .page {{ background:#fff; width:210mm; min-height:297mm; margin:20px auto; padding:16mm 18mm; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.1); border-radius:2px; page-break-after:always; }}
+  
+  .top-corner {{ position:absolute; top:0; right:0; width:0; height:0; border-style:solid; border-width:0 70px 70px 0; border-color:transparent #111827 transparent transparent; }}
+
+  .header {{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; border-bottom:1px solid #e5e7eb; padding-bottom:14px; }}
+  .brand-title {{ font-size:20px; font-weight:800; letter-spacing:2px; color:#111; }}
+  .brand-slogan {{ font-size:7px; font-weight:700; color:#6b7280; letter-spacing:1.5px; }}
+  .company-details {{ font-size:10px; color:#374151; line-height:1.5; margin-top:8px; }}
+
+  .invoice-title-block {{ text-align:right; margin-right:20px; }}
+  .inv-main-title {{ font-size:22px; font-weight:800; color:#111; letter-spacing:2px; }}
+  .inv-sub-title {{ font-size:14px; font-weight:700; color:#111; margin-top:-2px; }}
+  .inv-en-title {{ font-size:8px; font-weight:700; color:#6b7280; letter-spacing:1px; margin-bottom:8px; }}
+
+  .doc-meta-table {{ margin-left:auto; border-collapse:collapse; font-size:10.5px; }}
+  .doc-meta-table td {{ padding:2px 4px; color:#374151; text-align:left; }}
+  .doc-meta-table td:first-child {{ font-weight:700; color:#4b5563; }}
+
+  .customer-box {{ display:flex; justify-content:space-between; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px 16px; margin-bottom:16px; gap:16px; }}
+  .cust-label {{ font-size:8.5px; font-weight:700; color:#9ca3af; text-transform:uppercase; letter-spacing:1px; margin-bottom:2px; }}
+  .cust-name {{ font-size:13px; font-weight:700; color:#111827; margin-bottom:4px; }}
+  .cust-info {{ font-size:10.5px; color:#374151; line-height:1.5; }}
+
+  .items-table {{ width:100%; border-collapse:collapse; margin-bottom:16px; }}
+  .items-table thead tr {{ background:#f3f4f6; border-top:1px solid #d1d5db; border-bottom:1px solid #d1d5db; }}
+  .items-table th {{ padding:8px 10px; font-size:10px; font-weight:700; color:#374151; text-transform:uppercase; }}
+  .items-table tbody tr {{ border-bottom:1px solid #f3f4f6; }}
+  .items-table td {{ padding:10px; font-size:11px; color:#1f2937; vertical-align:middle; }}
+
+  .summary-wrapper {{ display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; gap:20px; }}
+  .baht-text-box {{ flex:1; display:flex; flex-direction:column; justify-content:space-between; }}
+  .baht-text {{ font-size:12px; font-weight:700; color:#111827; background:#f3f4f6; padding:8px 12px; border-radius:6px; border-left:4px solid #111827; margin-bottom:10px; }}
+  .note-box {{ font-size:10px; color:#4b5563; line-height:1.5; background:#fffbeb; padding:8px 12px; border-radius:6px; border-left:3px solid #f59e0b; }}
+
+  .calc-table {{ width:290px; border-collapse:collapse; font-size:11px; }}
+  .calc-table td {{ padding:4px 0; color:#4b5563; }}
+  .calc-table td:last-child {{ color:#111827; font-weight:600; }}
+  .grand-total-row td {{ background:#111827; color:#fff !important; font-size:13px; font-weight:700; padding:8px 10px; border-radius:4px; margin-top:6px; }}
+
+  .signatures-wrapper {{ display:flex; justify-content:space-between; align-items:flex-end; margin-top:30px; padding-top:20px; border-top:1px solid #e5e7eb; text-align:center; }}
+  .sig-box {{ width:180px; }}
+  .sig-line {{ border-bottom:1px dashed #9ca3af; height:45px; margin-bottom:8px; }}
+  .sig-label {{ font-size:10px; font-weight:600; color:#374151; }}
+  .sig-date {{ font-size:9px; color:#9ca3af; margin-top:4px; }}
+  .thank-box {{ font-size:11px; font-weight:700; color:#111827; line-height:1.4; }}
+  .thank-box span {{ font-size:8px; color:#6b7280; letter-spacing:1px; }}
+
+  .bottom-watermark {{ position:absolute; bottom:12mm; left:0; right:0; text-align:center; font-size:7.5px; font-weight:700; color:#9ca3af; letter-spacing:2px; }}
+
   @media print {{
-    @page {{ margin:0; size:A4; }}
+    @page {{ size:A4; margin:0; }}
     body {{ background:#fff; }}
-    .page {{ padding:40px 48px; min-height:unset; box-shadow:none; }}
+    .page {{ margin:0; width:100%; min-height:297mm; padding:16mm 18mm; box-shadow:none; border-radius:0; }}
   }}
 </style>
 </head>
 <body>
-<div class="page">
-  <div class="header">
-    <div>
-      <div class="brand">TRUSTLAB</div>
-      <div class="brand-sub">LUXURY AUTHENTICATION THAILAND</div>
-    </div>
-    <div class="invoice-label">
-      <h2>{'ใบเสร็จรับเงิน' if payment_status == 'paid' else 'ใบแจ้งหนี้'}</h2>
-      <div class="ref">{ref_no}</div>
-      <div class="ref" style="margin-top:4px;">{date_str} · {time_str}</div>
-    </div>
-  </div>
-
-  <div class="meta-grid">
-    <div class="meta-block">
-      <div class="meta-title">ข้อมูลลูกค้า</div>
-      <p><strong>{cname}</strong></p>
-      <p>โทร: {cphone}</p>
-      <p>ระดับสมาชิก: {cmembership}</p>
-    </div>
-    <div class="meta-block">
-      <div class="meta-title">ข้อมูลสินค้า</div>
-      <p><strong>{pbrand}</strong> {pmodel}</p>
-      <p>ประเภท: {pcategory} {'· สี: ' + pcolor if pcolor and pcolor != '-' else ''}</p>
-      {'<p>Serial: ' + pserial + '</p>' if pserial and pserial != '-' else ''}
-      {'<p style="color:#f59e0b;font-weight:700;">⚡ Express Service</p>' if express else ''}
-    </div>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th style="text-align:left">รายการบริการ</th>
-        <th>จำนวนเงิน</th>
-      </tr>
-    </thead>
-    <tbody>{items_html if items_html else '<tr><td colspan="2" style="text-align:center;color:#9ca3af;padding:20px;">ไม่มีรายการ</td></tr>'}
-    </tbody>
-  </table>
-
-  <div class="total-block">
-    <table class="total-table">
-      <tr>
-        <td>วิธีชำระ</td>
-        <td>{payment_label}</td>
-      </tr>
-      <tr>
-        <td>สถานะ</td>
-        <td><span class="status-badge">{status_label}</span></td>
-      </tr>
-      <tr class="grand">
-        <td><strong>รวมทั้งสิ้น</strong></td>
-        <td><strong>฿{total_cost:,.0f}</strong></td>
-      </tr>
-    </table>
-  </div>
-
-  {'<div class="note-block"><strong>หมายเหตุจากผู้เชี่ยวชาญ:</strong><br>' + expert_note + '</div>' if expert_note else ''}
-
-  <div class="footer-bar">
-    <div class="company">
-      TrustLab Thailand · trustlabthailand.com<br>
-      โทร 02-XXX-XXXX · อีเมล info@trustlabthailand.com
-    </div>
-    <div style="font-size:10px;color:#9ca3af;">
-      {'คิวที่: ' + str(queue_no) if queue_no else ''}<br>
-      เอกสารนี้ออกโดยระบบ TrustLab POS
-    </div>
-  </div>
-</div>
+{html_original}
+{html_copy}
 <script>window.onload = () => setTimeout(() => window.print(), 600);</script>
 </body>
 </html>"""
