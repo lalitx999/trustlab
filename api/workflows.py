@@ -26,7 +26,9 @@ from .promptpay import generate_promptpay_payload, generate_qr_code_image
 
 
 def record(request, action, booking=None, job=None, **detail):
-    WorkflowEvent.objects.create(actor=request.user, action=action, booking=booking, job=job, detail=detail)
+    actor = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
+    if actor:
+        WorkflowEvent.objects.create(actor=actor, action=action, booking=booking, job=job, detail=detail)
 
 
 def pk_value(value):
@@ -117,13 +119,16 @@ def create_booking(request):
             phone = ''.join(c for c in str(data.get('phone', '')) if c.isdigit())
             if not name or len(phone) < 9:
                 raise ValidationError('กรุณาระบุชื่อและเบอร์โทรให้ครบ')
-            if Customer.objects.filter(phone_number=phone).exists():
-                raise ValidationError('เบอร์นี้มีข้อมูลลูกค้าแล้ว กรุณาเข้าสู่ระบบหรือติดต่อเจ้าหน้าที่')
-            customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, note=data.get('customer_note', ''))
+            customer = Customer.objects.filter(phone_number=phone).first()
+            if not customer:
+                customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, note=data.get('customer_note', ''))
         branch = get_object_or_404(Branch, pk=data.get('branch_id'), is_active=True)
         try:
             date = datetime.date.fromisoformat(data.get('date', ''))
-            time = datetime.time.fromisoformat(data.get('timeSlot', ''))
+            ts_raw = str(data.get('timeSlot', '')).split('-')[0].strip()
+            if len(ts_raw) == 5:
+                ts_raw += ':00'
+            time = datetime.time.fromisoformat(ts_raw)
         except (ValueError, TypeError):
             raise ValidationError('กรุณาระบุวันและเวลานัดหมาย')
         if date < timezone.localdate() and not staff(request.user):
