@@ -252,6 +252,10 @@ class JobSerializer(serializers.ModelSerializer):
         return "สาขาหลัก (Headquarters - Bangkok)"
 
     def get_expert_name(self, obj):
+        if obj.result_recorded_by:
+            return obj.result_recorded_by.full_name or obj.result_recorded_by.username
+        if obj.expert_source:
+            return obj.expert_source
         return "สถาบันตรวจวิเคราะห์ TRUST LAB (Senior Specialist)"
 
     def get_photos(self, obj):

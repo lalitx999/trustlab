@@ -261,10 +261,20 @@ def job_update(request, pk):
     job.expert_instruction = str(request.data.get('expert_instruction', job.expert_instruction or ''))
     job.status, job.result = state, result
     job.tag_code = str(request.data.get('tag_code', job.tag_code)).strip()
-    job.expert_source = str(request.data.get('expert_source', job.expert_source)).strip()
-    if request.user.role == 'admin' and state == 'completed' and not job.expert_source:
-        raise ValidationError('กรุณาระบุผู้เชี่ยวชาญหรือแหล่งที่ให้ผลเมื่อบันทึกแทน')
-    job.result_recorded_by = request.user
+    if request.data.get('expert_id'):
+        try:
+            expert_user = StaffUser.objects.get(pk=request.data['expert_id'])
+            job.result_recorded_by = expert_user
+            job.expert_source = expert_user.full_name or expert_user.username
+        except StaffUser.DoesNotExist:
+            pass
+    elif request.data.get('expert_source'):
+        job.expert_source = str(request.data['expert_source']).strip()
+    elif not job.result_recorded_by:
+        job.result_recorded_by = request.user
+
+    if request.user.role == 'admin' and state == 'completed' and not job.expert_source and not job.result_recorded_by:
+        raise ValidationError('กรุณาระบุผู้เชี่ยวชาญหรือผู้ตรวจเมื่อบันทึกผล')
     job.save()
     if state == 'completed' and result == 'authentic' and job.service_package != 'photo_review':
         issue(job)
