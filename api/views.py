@@ -1,6 +1,8 @@
+import os
 import datetime
 import uuid
 import decimal
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
 from django.db.models import Q
