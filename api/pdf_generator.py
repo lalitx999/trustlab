@@ -358,13 +358,10 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawString(340, 36, "Line: @trustlab")
     c.linkURL("https://line.me/R/ti/p/@trustlab", (340, 30, 430, 46), relative=0)
     
-    c.restoreState()
-    
     # Draw small bottom right QR code
     c.setFont(FONT_REGULAR, 5.5)
     c.drawRightString(width - 80, 42, "SCAN TO VERIFY")
     c.drawImage(qr_reader, width - 70, 32, width=30, height=30)
-    c.restoreState()
     
     
     # 9. Watermark overlay if revoked
