@@ -169,14 +169,15 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
-# SMTP Email Configuration settings
+# Hostinger Email / SMTP Configuration settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('SMTP_PORT', '587'))
-EMAIL_USE_TLS = os.getenv('SMTP_USE_TLS', 'True') == 'True'
-EMAIL_HOST_USER = os.getenv('SMTP_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('SMTP_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', 'info@trustlabthailand.com')
+EMAIL_HOST = os.getenv('EMAIL_HOST', os.getenv('SMTP_HOST', 'smtp.hostinger.com'))
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', os.getenv('SMTP_PORT', '465')))
+EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'True').lower() in ('true', '1')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1')
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', os.getenv('SMTP_USER', ''))
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', os.getenv('SMTP_PASSWORD', ''))
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', os.getenv('SMTP_FROM_EMAIL', 'TRUST LAB THAILAND <noreply@trustlabthailand.com>'))
 
 # Upload Payload Size Limit Configuration (Allow multi-photo uploads)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50 MB

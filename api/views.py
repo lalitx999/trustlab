@@ -401,14 +401,17 @@ def send_line_flex_message(recipient_line_id, cert):
 @api_view(['POST'])
 @permission_classes([IsStaff])
 def certificate_send(request, pk):
-    """Simulates sending the certificate to client via LINE / Email and logs it"""
+    """Dispatches certificate to client via LINE or Hostinger Email and records log"""
     cert = resolve_certificate(pk)
-    method = request.data.get('method', 'email')
-    recipient = request.data.get('recipient', '')
+    method = str(request.data.get('method', 'email')).lower()
+    recipient = str(request.data.get('recipient', '')).strip()
 
     # Dispatch LINE Flex Message if method is line
     if method == 'line' and recipient:
         send_line_flex_message(recipient, cert)
+    elif method == 'email':
+        from .emails import send_certificate_email
+        send_certificate_email(cert, recipient)
     
     # Write sent log
     log = CertificateSendLog.objects.create(

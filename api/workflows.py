@@ -167,22 +167,24 @@ def create_booking(request):
         evidence = image_data(data.get('slip_base64')) if data.get('slip_base64') and payment in ('promptpay', 'transfer') else ''
         if payment == 'promptpay' and not evidence and not is_frontdesk:
             raise ValidationError('กรุณาแนบสลิปชำระเงิน')
-        if evidence:
-            from .easyslip import verify_slip_image
-            verify_slip_image(evidence, snapshot['total'])
-        service, _ = ServiceType.objects.get_or_create(service_name=snapshot['service_package'], defaults={'description': 'Meeting package', 'price_note': ''})
+        is_paid_initial = bool(data.get('mark_paid') or data.get('paid') or payment == 'wallet')
+        payment_status_val = 'pending_review' if evidence else ('paid' if is_paid_initial else 'unpaid')
+        booking_status_val = 'confirmed' if is_paid_initial else 'pending'
+
         booking = Booking.objects.create(customer=customer, branch=branch, booking_date=date, booking_time=time,
             service_type=service, service_package=snapshot['service_package'], category=snapshot['category'],
             brand_name=snapshot['brand'], model=data['model'], note=data.get('note', ''),
             price_snapshot=snapshot, delivery_method=snapshot['delivery_method'], shipping_fee=snapshot['shipping_fee'],
             payment_method=payment, payment_evidence=evidence, request_key=key, request_fingerprint=fingerprint,
-            payment_status='pending_review' if evidence else 'unpaid', **address)
+            payment_status=payment_status_val, status=booking_status_val, **address)
         if payment == 'wallet':
             change_credit(customer, -money(snapshot['total']), f'booking:{booking.pk}', 'ชำระค่าบริการ', request.user)
-            booking.payment_status = 'paid'
-            booking.status = 'confirmed'
-            booking.save()
             record(request, 'wallet_payment', booking=booking, amount=snapshot['total'])
+
+        if is_paid_initial:
+            from .emails import send_payment_confirmation_email
+            send_payment_confirmation_email(booking)
+
         photos = data.get('photos', [])
         if not isinstance(photos, list) or len(photos) > 20:
             raise ValidationError('แนบภาพได้สูงสุด 20 ภาพ')
@@ -329,6 +331,9 @@ def job_update(request, pk):
     job.save()
     if state == 'completed' and result in ('authentic', 'fake') and job.service_package != 'photo_review':
         issue(job)
+    if state == 'completed':
+        from .emails import send_inspection_result_email
+        send_inspection_result_email(job)
     record(request, 'inspection', job=job, result=result, status=state, expert_source=job.expert_source)
     if job.booking and state == 'completed':
         job.booking.status = 'completed'
@@ -400,6 +405,8 @@ def receive_payment(request, pk):
     booking.save()
     Job.objects.filter(booking=booking).update(payment_status='paid', payment_method=method)
     record(request, 'counter_payment', booking=booking, method=method, reference=reference)
+    from .emails import send_payment_confirmation_email
+    send_payment_confirmation_email(booking)
     return Response({'status': 'paid'})
 
 
