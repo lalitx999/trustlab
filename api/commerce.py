@@ -49,7 +49,13 @@ def quote(data, customer=None, allow_missing_price=False):
     brand = str(data.get('brand', '')).strip()
     if not brand:
         raise ValidationError('กรุณาระบุแบรนด์')
-    tier = customer.membership_level.level_name.lower() if customer and customer.membership_level else 'general'
+    req_tier = data.get('membership_level') or data.get('membership_tier') or data.get('membership_level_name')
+    if req_tier:
+        tier = str(req_tier).strip().lower()
+    elif customer and customer.membership_level:
+        tier = customer.membership_level.level_name.lower()
+    else:
+        tier = 'general'
     if package.code == 'photo_review':
         amount = Decimal('500.00')
     else:

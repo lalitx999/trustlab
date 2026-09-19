@@ -281,12 +281,26 @@ class JobSerializer(serializers.ModelSerializer):
         try:
             return obj.certificate.cert_code or obj.certificate.id
         except Certificate.DoesNotExist:
+            if obj.status == 'completed' and obj.result in ('authentic', 'fake') and obj.service_package != 'photo_review':
+                try:
+                    from .workflows import issue
+                    cert = issue(obj)
+                    return cert.cert_code
+                except Exception:
+                    pass
             return None
 
     def get_cert_status(self, obj):
         try:
             return obj.certificate.cert_status
         except Certificate.DoesNotExist:
+            if obj.status == 'completed' and obj.result in ('authentic', 'fake') and obj.service_package != 'photo_review':
+                try:
+                    from .workflows import issue
+                    cert = issue(obj)
+                    return cert.cert_status
+                except Exception:
+                    pass
             return None
 
 

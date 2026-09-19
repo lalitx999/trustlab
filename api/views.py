@@ -165,7 +165,12 @@ def customer_create(request):
         customer = Customer.objects.filter(phone_number=phone).first()
         
     if not customer:
-        membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
+        req_tier = request.data.get('membership_level') or request.data.get('membership_tier')
+        membership = None
+        if req_tier:
+            membership = MembershipLevel.objects.filter(level_name__iexact=req_tier).first()
+        if not membership:
+            membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
         
         customer = Customer.objects.create(
             full_name=full_name or 'Walk-in Customer',

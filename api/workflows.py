@@ -128,7 +128,15 @@ def create_booking(request):
                 raise ValidationError('กรุณาระบุชื่อและเบอร์โทรให้ครบ')
             customer = Customer.objects.filter(phone_number=phone).first()
             if not customer:
-                customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, note=data.get('customer_note', ''))
+                req_tier = data.get('membership_level') or data.get('membership_tier')
+                membership = None
+                if req_tier:
+                    from .models import MembershipLevel
+                    membership = MembershipLevel.objects.filter(level_name__iexact=req_tier).first()
+                if not membership:
+                    from .models import MembershipLevel
+                    membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
+                customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, membership_level=membership, note=data.get('customer_note', ''))
         branch = get_object_or_404(Branch, pk=data.get('branch_id'), is_active=True)
         try:
             date = datetime.date.fromisoformat(data.get('date', ''))
@@ -230,8 +238,8 @@ def receive_booking(request, pk):
 
 
 def issue(job, custom_code=None):
-    if job.service_package not in ('cert_15d', 'cert_90d') or job.status != 'completed' or job.result != 'authentic':
-        raise ValidationError('ออกใบรับรองได้เฉพาะงานตรวจสินค้าจริงที่เสร็จและผลเป็นแท้')
+    if job.service_package not in ('cert_15d', 'cert_90d') or job.status != 'completed' or not job.result:
+        raise ValidationError('ออกใบรับรองได้เฉพาะงานตรวจสินค้าจริงที่ตรวจเสร็จแล้ว')
     days = 15 if job.service_package == 'cert_15d' else 90
     if job.price_snapshot and isinstance(job.price_snapshot, dict) and job.price_snapshot.get('validity_days'):
         try:
@@ -239,13 +247,22 @@ def issue(job, custom_code=None):
         except (ValueError, TypeError):
             pass
     code_to_use = custom_code or job.tag_code or f'TL-{uuid.uuid4().hex[:12].upper()}'
-    cert, created = Certificate.objects.get_or_create(job=job, defaults={'cert_code': code_to_use,
-        'validity_days': days, 'expires_at': timezone.now() + datetime.timedelta(days=days)})
-    if not created and (custom_code or job.tag_code):
-        target = custom_code or job.tag_code
-        if target and cert.cert_code != target:
-            cert.cert_code = target
-            cert.save(update_fields=['cert_code'])
+    cert_status = 'authentic' if job.result == 'authentic' else 'unauthentic'
+    cert, created = Certificate.objects.get_or_create(job=job, defaults={
+        'cert_code': code_to_use,
+        'cert_status': cert_status,
+        'validity_days': days,
+        'expires_at': timezone.now() + datetime.timedelta(days=days)
+    })
+    if not created:
+        if cert.cert_status != cert_status:
+            cert.cert_status = cert_status
+            cert.save(update_fields=['cert_status'])
+        if (custom_code or job.tag_code):
+            target = custom_code or job.tag_code
+            if target and cert.cert_code != target:
+                cert.cert_code = target
+                cert.save(update_fields=['cert_code'])
     return cert
 
 
@@ -310,7 +327,7 @@ def job_update(request, pk):
         job.result_recorded_by = request.user
 
     job.save()
-    if state == 'completed' and result == 'authentic' and job.service_package != 'photo_review':
+    if state == 'completed' and result in ('authentic', 'fake') and job.service_package != 'photo_review':
         issue(job)
     record(request, 'inspection', job=job, result=result, status=state, expert_source=job.expert_source)
     if job.booking and state == 'completed':
