@@ -267,7 +267,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawString(410, verify_y + 55, "OR VISIT")
     c.setFont(FONT_BOLD, 7)
     c.setFillColorRGB(0.08, 0.08, 0.08)
-    c.drawString(410, verify_y + 46, "trustlabthailand.com/verify")
+    c.drawString(410, verify_y + 46, "www.trustlabthailand.com/verify")
     
     # Certificate ID pill (solid black background with white text)
     c.setFillColorRGB(0.08, 0.08, 0.08)
@@ -350,7 +350,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.setFillColorRGB(0.2, 0.2, 0.2)
     
     c.drawString(40, 36, "www.trustlabthailand.com")
-    c.linkURL("https://trustlabthailand.com", (40, 30, 170, 46), relative=0)
+    c.linkURL("https://www.trustlabthailand.com", (40, 30, 170, 46), relative=0)
     
     c.drawString(200, 36, "IG : trustlab.thailand")
     c.linkURL("https://instagram.com/trustlab.thailand", (200, 30, 310, 46), relative=0)

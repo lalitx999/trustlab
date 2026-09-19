@@ -186,7 +186,7 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000
 
 
 PROMPTPAY_RECEIVER_ID = os.getenv('PROMPTPAY_RECEIVER_ID', '')
-PUBLIC_SITE_URL = os.getenv('PUBLIC_SITE_URL', 'http://localhost:3000').rstrip('/')
+PUBLIC_SITE_URL = os.getenv('PUBLIC_SITE_URL', 'https://www.trustlabthailand.com').rstrip('/')
 CERTIFICATE_NOTICE = os.getenv('CERTIFICATE_NOTICE', '')
 INSTAGRAM_URL = os.getenv('INSTAGRAM_URL', '')
 LINE_OFFICIAL_URL = os.getenv('LINE_OFFICIAL_URL', '')
