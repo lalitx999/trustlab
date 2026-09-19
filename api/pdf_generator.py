@@ -123,8 +123,10 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         bps = list(certificate.job.booking.photos.all())
         
     if not selected_ids:
-        # Fallback to first 3 staff-sourced photos
+        # Fallback to first 3 staff-sourced photos, or all photos if no staff photos
         fallback = [bp for bp in bps if bp.photo_type == 'staff'][:3]
+        if not fallback:
+            fallback = bps[:3]
         selected_ids = [bp.id for bp in fallback]
         
     selected_bps = []

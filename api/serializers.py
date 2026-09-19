@@ -386,6 +386,8 @@ class CertificateSerializer(serializers.ModelSerializer):
         
         if not selected_ids:
             fallback = [bp for bp in all_bps if bp.photo_type == 'staff'][:3]
+            if not fallback:
+                fallback = all_bps[:3]
             selected_ids = [bp.id for bp in fallback]
             
         ordered_photos = []
@@ -398,10 +400,19 @@ class CertificateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         selected_ids = obj.selected_photos or []
         
-        all_photos = []
+        all_bps = []
         if obj.job.booking:
-            for bp in obj.job.booking.photos.all().order_by('uploaded_at'):
-                if bp.photo:
+            all_bps = list(obj.job.booking.photos.all().order_by('uploaded_at'))
+            
+        if not selected_ids:
+            fallback = [bp for bp in all_bps if bp.photo_type == 'staff'][:3]
+            if not fallback:
+                fallback = all_bps[:3]
+            selected_ids = [bp.id for bp in fallback]
+            
+        all_photos = []
+        for bp in all_bps:
+            if bp.photo:
                     url = bp.photo.url
                     if request:
                         url = request.build_absolute_uri(url)

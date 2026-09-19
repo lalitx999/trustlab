@@ -214,9 +214,10 @@ def receive_booking(request, pk):
     # Lock branch while allocating a unique daily queue (all new check-ins use this path).
     Branch.objects.select_for_update().get(pk=booking.branch_id)
     count = Job.objects.filter(created_at__date=timezone.localdate()).count()
+    tag_code_val = str(request.data.get('tag_code') or request.data.get('cert_code') or '').strip()
     job = Job.objects.create(booking=booking, customer=booking.customer, category=booking.category,
         brand=request.data.get('brand', booking.brand_name), model=request.data.get('model', booking.model), color=request.data.get('color', ''),
-        serial_number=request.data.get('serial_number', ''),
+        serial_number=request.data.get('serial_number', ''), tag_code=tag_code_val,
         material=request.data.get('material', ''), sub_category=request.data.get('sub_category', ''),
         accessories=request.data.get('accessories', ''), notes=request.data.get('note', booking.note),
         expert_instruction=request.data.get('expert_instruction', ''), queue_no=f'{booking.branch_id}-{count + 1:03}',
@@ -237,8 +238,14 @@ def issue(job, custom_code=None):
             days = int(job.price_snapshot['validity_days'])
         except (ValueError, TypeError):
             pass
-    cert, _ = Certificate.objects.get_or_create(job=job, defaults={'cert_code': custom_code or f'TL-{uuid.uuid4().hex[:12].upper()}',
+    code_to_use = custom_code or job.tag_code or f'TL-{uuid.uuid4().hex[:12].upper()}'
+    cert, created = Certificate.objects.get_or_create(job=job, defaults={'cert_code': code_to_use,
         'validity_days': days, 'expires_at': timezone.now() + datetime.timedelta(days=days)})
+    if not created and (custom_code or job.tag_code):
+        target = custom_code or job.tag_code
+        if target and cert.cert_code != target:
+            cert.cert_code = target
+            cert.save(update_fields=['cert_code'])
     return cert
 
 
@@ -750,10 +757,12 @@ def walkin(request):
         if not job:
             Branch.objects.select_for_update().get(pk=booking.branch_id)
             count = Job.objects.filter(created_at__date=timezone.localdate()).count()
+            tag_val = str(data.get('tag_code') or data.get('cert_code') or '').strip()
             job = Job.objects.create(
                 booking=booking, customer=booking.customer, category=data.get('category', booking.category),
                 brand=data.get('brand') or booking.brand_name, model=data.get('model', booking.model),
                 color=str(data.get('color', '')).strip(), serial_number=str(data.get('serial_number', '')).strip(),
+                tag_code=tag_val,
                 material=str(data.get('material', '')).strip(), accessories=str(data.get('accessories', '')).strip(),
                 notes=str(data.get('note', booking.note)).strip(), expert_instruction=str(data.get('expert_instruction', '')).strip(),
                 queue_no=f'{booking.branch_id}-{count + 1:03}', service_package=booking.service_package,
@@ -763,9 +772,11 @@ def walkin(request):
                 shipping_status='pending_return' if booking.delivery_method == 'shipping' else 'not_applicable'
             )
         else:
-            for f in ('serial_number', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
+            for f in ('serial_number', 'tag_code', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
                 if f in data:
                     setattr(job, f, str(data[f]).strip())
+            if 'cert_code' in data and data['cert_code']:
+                job.tag_code = str(data['cert_code']).strip()
             if 'brand' in data or 'brand_name' in data:
                 job.brand = str(data.get('brand') or data.get('brand_name')).strip()
             if 'model' in data:
@@ -773,6 +784,12 @@ def walkin(request):
             if 'category' in data:
                 job.category = str(data['category']).strip()
             job.save()
+
+            if job.tag_code:
+                cert = Certificate.objects.filter(job=job).first()
+                if cert and cert.cert_code != job.tag_code:
+                    cert.cert_code = job.tag_code
+                    cert.save(update_fields=['cert_code'])
         booking.refresh_from_db()
         return Response(walkin_detail(booking, request), status=200)
 
