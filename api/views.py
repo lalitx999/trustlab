@@ -1071,12 +1071,17 @@ def public_invoice_preview(request):
     before_vat = round(after_discount - vat_amount, 2)
 
     baht_text = num_to_thai_baht(total_cost)
-    doc_inv_no = f"INV{now.strftime('%Y%m')}{job_id or queue_no or '0001'}"
-    doc_rc_no = f"RC{now.strftime('%Y%m')}{job_id or queue_no or '0001'}"
+    raw_id = job_id or queue_no or '0001'
+    clean_num = str(raw_id).split('-')[-1].strip()
+    if clean_num.isdigit():
+        clean_num = f"{int(clean_num):04d}"
+    doc_inv_no = d.get('invNo') or d.get('invoiceNo') or f"INV-{now.strftime('%y%m')}-{clean_num}"
+    doc_rc_no = d.get('rcNo') or d.get('receiptNo') or f"RC-{now.strftime('%y%m')}-{clean_num}"
 
     # Master Company Data
     COMP_NAME = "บริษัท เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น (ไทยแลนด์) จำกัด (สำนักงานใหญ่)"
-    COMP_ADDR = "388 อาคารสยามสแควร์วัน ห้อง MS1107 ชั้น 1 ถนนพระราม 1 แขวงปทุมวัน เขตปทุมวัน กรุงเทพมหานคร 10330"
+    COMP_ADDR_LINE1 = "388 อาคารสยามสแควร์วัน ห้อง MS1107 ชั้น 1 ถนนพระราม 1"
+    COMP_ADDR_LINE2 = "แขวงปทุมวัน เขตปทุมวัน กรุงเทพมหานคร 10330"
     COMP_TAX_ID = "0105569150179"
     COMP_TEL = "( รออัพเดทเบอร์ร้าน )"
 
@@ -1149,7 +1154,8 @@ def public_invoice_preview(request):
   <div class="logo-text">TRUST LAB THAILAND</div>
   <div style="font-size:8.5px;color:#444;line-height:1.3;margin-top:4px;">
     {COMP_NAME}<br>
-    {COMP_ADDR}<br>
+    {COMP_ADDR_LINE1}<br>
+    {COMP_ADDR_LINE2}<br>
     เลขประจำตัวผู้เสียภาษี {COMP_TAX_ID}<br>
     โทร. {COMP_TEL}
   </div>
@@ -1233,7 +1239,8 @@ def public_invoice_preview(request):
                   </div>
                   <div class="company-details">
                     <strong>{COMP_NAME}</strong><br>
-                    {COMP_ADDR}<br>
+                    {COMP_ADDR_LINE1}<br>
+                    {COMP_ADDR_LINE2}<br>
                     เลขประจำตัวผู้เสียภาษี {COMP_TAX_ID}<br>
                     โทร. {COMP_TEL}
                   </div>
@@ -1311,13 +1318,7 @@ def public_invoice_preview(request):
 
               <!-- Signatures Footer -->
               <div class="signatures-wrapper">
-                <div class="sig-box">
-                  <div class="sig-line"></div>
-                  <div class="sig-label">ผู้จัดทำ (ผู้รับสินค้า / บริการ)</div>
-                  <div class="sig-date">วันที่ ..... / ..... / ..........</div>
-                </div>
-
-                <div class="thank-box">
+                <div class="thank-box" style="text-align:left;">
                   ขอบคุณที่ใช้บริการ<br>
                   <span>THANK YOU</span>
                 </div>
