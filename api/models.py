@@ -183,8 +183,24 @@ class Booking(models.Model):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def customer_name(self):
+        return self.customer.full_name if self.customer else ''
+
+    @property
+    def customer_email(self):
+        return self.customer.email if self.customer else ''
+
+    @property
+    def customer_phone(self):
+        return self.customer.phone_number if self.customer else ''
+
+    @property
+    def customer_line(self):
+        return self.customer.line_id if self.customer else ''
+
     def __str__(self):
-        return f"Booking #{self.id} - {self.customer.full_name}"
+        return f"Booking #{self.id} - {self.customer.full_name if self.customer else ''}"
 
     class Meta:
         db_table = 'bookings'

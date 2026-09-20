@@ -97,10 +97,13 @@ def get_base_html_template(title, header_subtitle, body_html):
 
 def send_payment_confirmation_email(booking):
     """1. Sends Payment Confirmation Email upon successful payment."""
-    if not booking or not booking.customer_email:
+    if not booking:
+        return
+    email = getattr(booking, 'customer_email', None) or (booking.customer.email if getattr(booking, 'customer', None) else None)
+    if not email:
         return
 
-    cname = booking.customer_name or 'ลูกค้าผู้มีอุปการคุณ'
+    cname = getattr(booking, 'customer_name', None) or (booking.customer.full_name if getattr(booking, 'customer', None) else 'ลูกค้าผู้มีอุปการคุณ')
     booking_no = getattr(booking, 'booking_id', f"BK-{booking.pk}")
     brand = booking.brand_name or '-'
     model = booking.model or '-'
@@ -134,7 +137,7 @@ def send_payment_confirmation_email(booking):
 
     subject = f"[TRUST LAB] ยืนยันการชำระเงินเรียบร้อยแล้ว - รหัส {booking_no}"
     html = get_base_html_template("ยืนยันการชำระเงิน - TRUST LAB", "ยืนยันการรับชำระเงิน (PAYMENT CONFIRMED)", body_html)
-    send_async_email(subject, [booking.customer_email], html)
+    send_async_email(subject, [email], html)
 
 
 def send_inspection_result_email(job):
