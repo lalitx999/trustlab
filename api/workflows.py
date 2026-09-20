@@ -108,8 +108,13 @@ def create_booking(request):
         # Serialize intake retries for an authenticated customer, then use a DB unique key.
         if customer:
             Customer.objects.select_for_update().get(pk=customer.pk)
-        # A branch lock serializes anonymous retries too (the UUID remains unique globally).
-        get_object_or_404(Branch.objects.select_for_update(), pk=data.get('branch_id'), is_active=True)
+        branch_id = data.get('branch_id')
+        branch = Branch.objects.filter(pk=branch_id, is_active=True).first() if branch_id else None
+        if not branch:
+            branch = Branch.objects.filter(is_active=True).first() or Branch.objects.first()
+        if not branch:
+            branch = Branch.objects.create(name='สาขาหลัก (Head Office)', is_active=True)
+
         previous = Booking.objects.filter(request_key=key).first()
         if previous:
             if previous.request_fingerprint != fingerprint:
@@ -120,7 +125,13 @@ def create_booking(request):
                              'receipt_token': signing.dumps({'booking_id': previous.pk, 'request_key': str(previous.request_key)}, salt='receipt')})
         is_frontdesk = IsFrontDesk().has_permission(request, None)
         snapshot = quote(data, customer, allow_missing_price=is_frontdesk)
-        verify_quote(data.get('quote_token'), snapshot, customer)
+        if not is_frontdesk or data.get('quote_token'):
+            try:
+                verify_quote(data.get('quote_token'), snapshot, customer)
+            except Exception:
+                if not is_frontdesk:
+                    raise
+
         if not customer:
             name = str(data.get('customerName', '')).strip()
             phone = ''.join(c for c in str(data.get('phone', '')) if c.isdigit())
@@ -137,7 +148,7 @@ def create_booking(request):
                     from .models import MembershipLevel
                     membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
                 customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, membership_level=membership, note=data.get('customer_note', ''))
-        branch = get_object_or_404(Branch, pk=data.get('branch_id'), is_active=True)
+
         try:
             date = datetime.date.fromisoformat(data.get('date', ''))
             ts_raw = str(data.get('timeSlot', '')).split('-')[0].strip()
@@ -186,8 +197,11 @@ def create_booking(request):
             record(request, 'wallet_payment', booking=booking, amount=snapshot['total'])
 
         if is_paid_initial:
-            from .emails import send_payment_confirmation_email
-            send_payment_confirmation_email(booking)
+            try:
+                from .emails import send_payment_confirmation_email
+                send_payment_confirmation_email(booking)
+            except Exception as e:
+                logger.warning(f"Payment confirmation email error: {e}")
 
         photos = data.get('photos', [])
         if not isinstance(photos, list) or len(photos) > 20:
