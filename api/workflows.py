@@ -2,10 +2,13 @@
 import base64
 import hashlib
 import json
+import logging
 import datetime
 import io
 import uuid
 import zipfile
+
+logger = logging.getLogger(__name__)
 from django.conf import settings
 from django.core import signing
 from django.db import transaction
