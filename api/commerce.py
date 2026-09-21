@@ -61,6 +61,8 @@ def quote(data, customer=None, allow_missing_price=False):
         tier = customer.membership_level.level_name.lower()
     else:
         tier = 'general'
+    discount_percent = Decimal('0')
+    before_discount = None
     if package.code == 'photo_review':
         amount = Decimal('500.00')
     else:
@@ -130,8 +132,14 @@ def quote(data, customer=None, allow_missing_price=False):
                     found_bp_price = Decimal(str(base_amt))
 
         if rate:
+            before_discount = rate.amount
+            if factor is not None:
+                discount_percent = (Decimal('1') - factor) * 100
             amount = money(rate.amount * factor) if factor is not None else rate.amount
         elif found_bp_price is not None:
+            before_discount = found_bp_price
+            if factor is not None:
+                discount_percent = (Decimal('1') - factor) * 100
             amount = money(found_bp_price * factor) if factor is not None else found_bp_price
         elif allow_missing_price and data.get('manual_service_amount') is not None:
             if not str(data.get('price_reason', '')).strip():
@@ -147,8 +155,12 @@ def quote(data, customer=None, allow_missing_price=False):
                 amount = max(Decimal('3000.00'), default_base + Decimal('1500.00'))
             else:
                 amount = default_base
+            before_discount = amount
             if factor is not None:
+                discount_percent = (Decimal('1') - factor) * 100
                 amount = money(amount * factor)
+    if before_discount is None:
+        before_discount = amount
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')
@@ -162,6 +174,9 @@ def quote(data, customer=None, allow_missing_price=False):
     total = money(amount + shipping + (Decimal('0') if policy.prices_include_vat else vat))
     return {'service_package': code, 'validity_days': package.validity_days if code != 'photo_review' else 0,
             'category': category, 'brand': brand, 'member_tier': tier,
+            'service_amount_before_discount': str(money(before_discount)),
+            'member_discount_percent': str(money(discount_percent)),
+            'member_discount_amount': str(money(before_discount - amount)),
             'service_amount': str(money(amount)), 'shipping_fee': str(money(shipping)), 'vat_amount': str(vat),
             'subtotal': str(money(total - vat)), 'total': str(total), 'currency': 'THB',
             'prices_include_vat': policy.prices_include_vat, 'delivery_method': delivery,
