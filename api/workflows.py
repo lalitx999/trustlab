@@ -34,6 +34,20 @@ def record(request, action, booking=None, job=None, **detail):
         WorkflowEvent.objects.create(actor=actor, action=action, booking=booking, job=job, detail=detail)
 
 
+def schedule_payment_confirmation(booking):
+    """Notify only after the payment commits; email failures must not fail payment."""
+    booking_id = booking.pk
+
+    def notify():
+        try:
+            from .emails import send_payment_confirmation_email
+            send_payment_confirmation_email(booking)
+        except Exception:
+            logger.exception('Payment confirmation email failed (booking_id=%s)', booking_id)
+
+    transaction.on_commit(notify)
+
+
 def pk_value(value):
     try:
         return int(str(value).split('-')[-1])
@@ -200,11 +214,7 @@ def create_booking(request):
             record(request, 'wallet_payment', booking=booking, amount=snapshot['total'])
 
         if is_paid_initial:
-            try:
-                from .emails import send_payment_confirmation_email
-                send_payment_confirmation_email(booking)
-            except Exception as e:
-                logger.warning(f"Payment confirmation email error: {e}")
+            schedule_payment_confirmation(booking)
 
         photos = data.get('photos', [])
         if not isinstance(photos, list) or len(photos) > 20:
@@ -426,8 +436,7 @@ def receive_payment(request, pk):
     booking.save()
     Job.objects.filter(booking=booking).update(payment_status='paid', payment_method=method)
     record(request, 'counter_payment', booking=booking, method=method, reference=reference)
-    from .emails import send_payment_confirmation_email
-    send_payment_confirmation_email(booking)
+    schedule_payment_confirmation(booking)
     return Response({'status': 'paid'})
 
 

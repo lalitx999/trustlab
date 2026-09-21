@@ -6,16 +6,19 @@ Uses Hostinger SMTP (or configured Django Email Backend) to send HTML emails:
 3. Certificate Delivery Email (ส่งใบรับรองสินค้าพร้อมลิงก์ PDF & เว็บ)
 """
 import os
+import logging
 import threading
+from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.utils.html import strip_tags
 
 PUBLIC_SITE_URL = getattr(settings, 'PUBLIC_SITE_URL', 'https://www.trustlabthailand.com')
 DEFAULT_FROM = getattr(settings, 'DEFAULT_FROM_EMAIL', 'TRUST LAB THAILAND <noreply@trustlabthailand.com>')
+logger = logging.getLogger(__name__)
 
 
-def send_async_email(subject, recipient_list, html_content):
+def send_async_email(subject, recipient_list, html_content, *, booking_id=None):
     """Sends HTML email asynchronously in a separate background thread."""
     if not recipient_list or not any(recipient_list):
         return
@@ -34,10 +37,13 @@ def send_async_email(subject, recipient_list, html_content):
                 to=valid_recipients
             )
             msg.attach_alternative(html_content, "text/html")
-            msg.send(fail_silently=True)
-            print(f"📧 Email sent successfully to {valid_recipients}: {subject}")
-        except Exception as e:
-            print(f"⚠️ Failed to send email to {valid_recipients}: {e}")
+            sent = msg.send(fail_silently=False)
+            if sent:
+                logger.info('Email accepted by backend (booking_id=%s)', booking_id)
+            else:
+                logger.error('Email backend sent no messages (booking_id=%s)', booking_id)
+        except Exception:
+            logger.exception('Email delivery failed (booking_id=%s)', booking_id)
 
     thread = threading.Thread(target=_send)
     thread.daemon = True
@@ -107,7 +113,10 @@ def send_payment_confirmation_email(booking):
     booking_no = getattr(booking, 'booking_id', f"BK-{booking.pk}")
     brand = booking.brand_name or '-'
     model = booking.model or '-'
-    total = f"{booking.price_snapshot.get('total', 0):,.2f}" if booking.price_snapshot else '0.00'
+    amount = Decimal(str((booking.price_snapshot or {}).get('total', 0)))
+    if not amount.is_finite() or amount < 0:
+        raise ValueError('Invalid payment confirmation total')
+    total = f"{amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f}"
     pay_method = {'cash': 'เงินสด', 'transfer': 'โอนเงิน', 'credit_card': 'บัตรเครดิต', 'promptpay': 'PromptPay QR', 'wallet': 'เครดิตสะสม (Wallet)'}.get(booking.payment_method, booking.payment_method)
     receipt_url = f"{PUBLIC_SITE_URL}/authenzs/administator/walk-in?id={booking.pk}"
 
@@ -137,7 +146,7 @@ def send_payment_confirmation_email(booking):
 
     subject = f"[TRUST LAB] ยืนยันการชำระเงินเรียบร้อยแล้ว - รหัส {booking_no}"
     html = get_base_html_template("ยืนยันการชำระเงิน - TRUST LAB", "ยืนยันการรับชำระเงิน (PAYMENT CONFIRMED)", body_html)
-    send_async_email(subject, [email], html)
+    send_async_email(subject, [email], html, booking_id=booking.pk)
 
 
 def send_inspection_result_email(job):
