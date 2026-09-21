@@ -185,9 +185,11 @@ def create_booking(request):
         payment_status_val = 'pending_review' if evidence else ('paid' if is_paid_initial else 'unpaid')
         booking_status_val = 'confirmed' if is_paid_initial else 'pending'
 
-        service = ServiceType.objects.first()
-        if not service:
-            service = ServiceType.objects.create(service_name='Brand Authenticity Inspection', description='Inspection Service')
+        # Resolve the required FK for every intake, including an empty service catalog.
+        service, _ = ServiceType.objects.get_or_create(
+            service_name=snapshot['service_package'],
+            defaults={'description': 'Inspection Service'},
+        )
 
         booking = Booking.objects.create(customer=customer, branch=branch, booking_date=date, booking_time=time,
             service_type=service, service_package=snapshot['service_package'], category=snapshot['category'],

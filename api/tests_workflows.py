@@ -339,3 +339,37 @@ class WorkflowTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(response.data['amount'], '500.00')
         self.assertTrue(response.data['qr_image'].startswith('data:image/png'))
+
+    def test_walkin_resolves_service_for_each_package_without_catalog(self):
+        from .models import ServiceType
+        from unittest.mock import patch
+        self.assertFalse(ServiceType.objects.exists())
+        with patch('api.emails.send_payment_confirmation_email'):
+            for code in ('cert_15d', 'cert_90d', 'photo_review'):
+                data = self.walkin_payload(service_package=code, mark_paid=False,
+                    request_key=str(uuid.uuid4()), photos=[photo()] if code == 'photo_review' else [])
+                response = self.client.post('/api/walk-in', data, format='json')
+                self.assertEqual(response.status_code, 200, response.data)
+                booking = Booking.objects.get(pk=response.data['booking']['id'])
+                self.assertEqual(booking.service_type.service_name, code)
+                self.assertTrue(Job.objects.filter(booking=booking).exists())
+                retry = self.client.post('/api/walk-in', data, format='json')
+                self.assertEqual(retry.status_code, 200, retry.data)
+                self.assertEqual(retry.data['booking']['id'], booking.pk)
+        self.assertEqual(ServiceType.objects.count(), 3)
+        self.assertEqual(Booking.objects.count(), 3)
+        self.assertEqual(Job.objects.count(), 3)
+
+    def test_walkin_new_customer_reuses_matching_service(self):
+        from .models import ServiceType
+        from unittest.mock import patch
+        ServiceType.objects.create(service_name='Unrelated legacy service')
+        matching = ServiceType.objects.create(service_name='cert_15d')
+        data = self.walkin_payload(customer_id=None, customerName='Walk-in regression', phone='0899999999', mark_paid=False)
+        with patch('api.emails.send_payment_confirmation_email'):
+            response = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        booking = Booking.objects.get(pk=response.data['booking']['id'])
+        self.assertEqual(booking.service_type_id, matching.pk)
+        self.assertEqual(booking.customer.phone_number, '0899999999')
+        self.assertEqual(ServiceType.objects.count(), 2)
