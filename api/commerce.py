@@ -6,6 +6,11 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 from .models import CheckoutPolicy, PackagePrice, ServicePackage, Customer, CreditEntry, BrandPricing
 
 CENT = Decimal('0.01')
+MEMBER_PRICE_FACTORS = {
+    'general': Decimal('1'), 'silver': Decimal('1'),
+    'gold': Decimal('0.95'), '5pct': Decimal('0.95'),
+    'platinum': Decimal('0.85'), '15pct': Decimal('0.85'),
+}
 
 def money(value):
     try:
@@ -59,8 +64,12 @@ def quote(data, customer=None, allow_missing_price=False):
     if package.code == 'photo_review':
         amount = Decimal('500.00')
     else:
+        # Standard memberships always derive from the general package price.
+        # Keep the actual tier in the booking snapshot; old tier overrides are not used.
+        factor = MEMBER_PRICE_FACTORS.get(tier)
+        pricing_tier = 'general' if factor is not None else tier
         # 1. Look in PackagePrice (exact or alias match)
-        rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=brand, member_tier__iexact=tier).first()
+        rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=brand, member_tier__iexact=pricing_tier).first()
         
         alias_map = {
             'louis vuitton': ['lv', 'louis vuitton'],
@@ -82,12 +91,12 @@ def quote(data, customer=None, allow_missing_price=False):
         if not rate:
             possible_brands = alias_map.get(brand.lower(), [brand])
             for b in possible_brands:
-                rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=b, member_tier__iexact=tier).first()
+                rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=b, member_tier__iexact=pricing_tier).first()
                 if rate:
                     break
 
         # 2. Fallback to general member tier in PackagePrice if specific tier not found
-        if not rate and tier != 'general':
+        if not rate and pricing_tier != 'general':
             possible_brands = [brand] + alias_map.get(brand.lower(), [])
             for b in possible_brands:
                 rate = PackagePrice.objects.filter(package=package, category__iexact=category, brand__iexact=b, member_tier='general').first()
@@ -110,11 +119,7 @@ def quote(data, customer=None, allow_missing_price=False):
                         break
 
             if bp:
-                if tier in ('silver', '5pct'):
-                    base_amt = bp.price_5pct
-                elif tier in ('gold', 'platinum', '15pct'):
-                    base_amt = bp.price_15pct
-                elif tier in ('partner', 'corporate'):
+                if tier in ('partner', 'corporate'):
                     base_amt = bp.partner_price
                 else:
                     base_amt = bp.base_price
@@ -125,9 +130,9 @@ def quote(data, customer=None, allow_missing_price=False):
                     found_bp_price = Decimal(str(base_amt))
 
         if rate:
-            amount = rate.amount
+            amount = money(rate.amount * factor) if factor is not None else rate.amount
         elif found_bp_price is not None:
-            amount = found_bp_price
+            amount = money(found_bp_price * factor) if factor is not None else found_bp_price
         elif allow_missing_price and data.get('manual_service_amount') is not None:
             if not str(data.get('price_reason', '')).strip():
                 raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
@@ -135,17 +140,15 @@ def quote(data, customer=None, allow_missing_price=False):
         else:
             # 4. Default Category Fallback for custom/unlisted brands
             default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1000.00')
-            if tier in ('silver', '5pct'):
-                default_base = money(default_base * Decimal('0.95'))
-            elif tier in ('gold', 'platinum', '15pct'):
-                default_base = money(default_base * Decimal('0.85'))
-            elif tier in ('partner', 'corporate'):
+            if tier in ('partner', 'corporate'):
                 default_base = money(default_base * Decimal('0.75'))
 
             if package.code == 'cert_90d':
                 amount = max(Decimal('3000.00'), default_base + Decimal('1500.00'))
             else:
                 amount = default_base
+            if factor is not None:
+                amount = money(amount * factor)
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')

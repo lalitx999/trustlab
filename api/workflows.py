@@ -24,7 +24,7 @@ from .models import (Booking, BookingPhoto, Branch, Customer, Job, Certificate, 
                      WorkflowEvent, CancellationRequest, StaffUser)
 from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
 from .serializers import BookingSerializer, JobSerializer, CertificateSerializer, Base64ImageField
-from .commerce import money, quote, signed_quote, verify_quote, customer_for, change_credit, staff
+from .commerce import money, quote, signed_quote, verify_quote, customer_for, change_credit, staff, MEMBER_PRICE_FACTORS
 from .promptpay import generate_promptpay_payload, generate_qr_code_image
 
 
@@ -606,8 +606,11 @@ def pricing_settings(request):
             amount = money(r.get('amount'))
             if amount < 0 or r.get('category') not in ('Bag', 'Watch', 'Clothes', 'Shoes', 'Accessories') or not str(r.get('brand', '')).strip():
                 raise ValidationError('ราคา ประเภท หรือแบรนด์ไม่ถูกต้อง')
+            rate_tier = str(r.get('member_tier', 'general')).strip().lower()
+            if rate_tier in MEMBER_PRICE_FACTORS and rate_tier != 'general':
+                raise ValidationError('กรุณาแก้ราคาทั่วไป: Silver ราคาเท่าทั่วไป, Gold ลด 5%, Platinum ลด 15% อัตโนมัติ')
             PackagePrice.objects.update_or_create(package=package, category=r['category'], brand=r['brand'].strip(),
-                member_tier=str(r.get('member_tier', 'general')).strip().lower(), defaults={'amount': amount})
+                member_tier=rate_tier, defaults={'amount': amount})
         if d.get('package'):
             p = d['package']
             package = get_object_or_404(ServicePackage, code=p.get('code'))
@@ -619,7 +622,8 @@ def pricing_settings(request):
         record(request, 'pricing_update', approved=policy.approved)
     return Response({'policy': {'approved': policy.approved, 'prices_include_vat': policy.prices_include_vat,
                      'shipping_taxable': policy.shipping_taxable, 'shipping_fee': str(policy.shipping_fee)},
-                     'rates': list(PackagePrice.objects.values()), 'packages': list(ServicePackage.objects.values())})
+                     'rates': [r for r in PackagePrice.objects.values()
+                               if r['member_tier'].lower() not in MEMBER_PRICE_FACTORS or r['member_tier'].lower() == 'general'], 'packages': list(ServicePackage.objects.values())})
 
 
 @api_view(['GET'])

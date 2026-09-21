@@ -1,5 +1,6 @@
 import base64
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from django.core.files.base import ContentFile
 from rest_framework import serializers
 from .models import (
@@ -76,13 +77,20 @@ class MembershipLevelSerializer(serializers.ModelSerializer):
 
 class BrandPricingSerializer(serializers.ModelSerializer):
     price_general = serializers.IntegerField(source='base_price', read_only=True)
-    price_silver = serializers.IntegerField(source='price_5pct', read_only=True)
-    price_platinum = serializers.IntegerField(source='price_15pct', read_only=True)
+    price_silver = serializers.IntegerField(source='base_price', read_only=True)
+    price_gold = serializers.SerializerMethodField()
+    price_platinum = serializers.SerializerMethodField()
     price_partner = serializers.IntegerField(source='partner_price', read_only=True)
+
+    def get_price_gold(self, obj):
+        return float((obj.base_price * Decimal('0.95')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+    def get_price_platinum(self, obj):
+        return float((obj.base_price * Decimal('0.85')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     class Meta:
         model = BrandPricing
-        fields = ['id', 'category', 'brand', 'price_general', 'price_silver', 'price_platinum', 'price_partner']
+        fields = ['id', 'category', 'brand', 'price_general', 'price_silver', 'price_gold', 'price_platinum', 'price_partner']
 
 
 class ServiceTypeSerializer(serializers.ModelSerializer):

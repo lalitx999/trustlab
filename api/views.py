@@ -747,7 +747,8 @@ def brand_pricing_query(request):
     # Return placeholder fallback price in case brand pricing matrix isn't seeded
     return Response({
         "price_general": 1200,
-        "price_silver": 1140,
+        "price_silver": 1200,
+        "price_gold": 1140,
         "price_platinum": 1020,
         "price_partner": 850,
         "is_fallback": True

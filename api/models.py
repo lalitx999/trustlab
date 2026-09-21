@@ -83,8 +83,8 @@ class BrandPricing(models.Model):
     tier = models.CharField(max_length=20, choices=WATCH_TIERS, null=True, blank=True)
     brand = models.CharField(max_length=100)
     base_price = models.DecimalField(max_digits=10, decimal_places=2)
-    price_5pct = models.DecimalField(max_digits=10, decimal_places=2)  # Silver Discount
-    price_15pct = models.DecimalField(max_digits=10, decimal_places=2) # Platinum/Gold Discount
+    price_5pct = models.DecimalField(max_digits=10, decimal_places=2)  # Gold Discount
+    price_15pct = models.DecimalField(max_digits=10, decimal_places=2) # Platinum Discount
     partner_price = models.DecimalField(max_digits=10, decimal_places=2) # Partner Rate
     created_at = models.DateTimeField(auto_now_add=True)
 
