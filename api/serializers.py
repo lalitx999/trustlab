@@ -159,6 +159,9 @@ class BookingSerializer(serializers.ModelSerializer):
         # Check account type first
         if getattr(cust, 'account_type', 'standard') == 'corporate':
             return 'corporate'
+        tier = (obj.price_snapshot or {}).get('member_tier')
+        if tier:
+            return str(tier).strip().lower()
         if cust.membership_level:
             level = cust.membership_level.level_name.lower()
             if 'partner' in level:
@@ -181,6 +184,10 @@ class BookingSerializer(serializers.ModelSerializer):
         return 'BAG'
 
     def get_customer_type(self, obj):
+        tier = (obj.price_snapshot or {}).get('member_tier')
+        if tier:
+            return {'general': 'ทั่วไป', 'silver': 'Silver', 'gold': 'Gold',
+                    'platinum': 'Platinum', 'partner': 'Partner', 'corporate': 'Corporate'}.get(str(tier).lower(), tier)
         if obj.customer and obj.customer.membership_level:
             return obj.customer.membership_level.level_name
         return 'ทั่วไป'

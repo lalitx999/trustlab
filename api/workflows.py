@@ -142,14 +142,12 @@ def create_booking(request):
                 raise ValidationError('กรุณาระบุชื่อและเบอร์โทรให้ครบ')
             customer = Customer.objects.filter(phone_number=phone).first()
             if not customer:
-                req_tier = data.get('membership_level') or data.get('membership_tier')
-                membership = None
-                if req_tier:
-                    from .models import MembershipLevel
-                    membership = MembershipLevel.objects.filter(level_name__iexact=req_tier).first()
-                if not membership:
-                    from .models import MembershipLevel
-                    membership = MembershipLevel.objects.filter(level_name__iexact='General').first() or MembershipLevel.objects.first()
+                from .models import MembershipLevel
+                tier = snapshot.get('member_tier', 'general').strip().lower()
+                membership = MembershipLevel.objects.filter(level_name__iexact=tier).first()
+                # General customers may have no membership row; never assign an unrelated tier.
+                if membership is None and tier != 'general':
+                    raise ValidationError('ไม่พบระดับสมาชิกที่เลือก กรุณาตรวจสอบข้อมูลสมาชิก')
                 customer = Customer.objects.create(full_name=name, phone_number=phone, email=data.get('email') or None, line_id=data.get('line_id') or None, membership_level=membership, note=data.get('customer_note', ''))
 
         try:

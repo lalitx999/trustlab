@@ -373,3 +373,41 @@ class WorkflowTests(TestCase):
         self.assertEqual(booking.service_type_id, matching.pk)
         self.assertEqual(booking.customer.phone_number, '0899999999')
         self.assertEqual(ServiceType.objects.count(), 2)
+
+    def test_general_intake_does_not_fall_back_to_silver(self):
+        from .models import MembershipLevel
+        from unittest.mock import patch
+        MembershipLevel.objects.all().delete()
+        MembershipLevel.objects.create(level_name='Silver', certificate_price=0)
+        data = self.walkin_payload(customer_id=None, customerName='General customer', phone='0899999911',
+                                   membership_level='general', mark_paid=False)
+        with patch('api.emails.send_payment_confirmation_email'):
+            response = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        booking = Booking.objects.get(pk=response.data['booking']['id'])
+        self.assertIsNone(booking.customer.membership_level_id)
+        self.assertEqual(response.data['booking']['member_badge'], 'general')
+        self.assertEqual(response.data['booking']['customer_type'], 'ทั่วไป')
+
+    def test_sale_membership_uses_intake_snapshot_not_current_customer(self):
+        from .models import MembershipLevel
+        from .serializers import BookingSerializer
+        from unittest.mock import patch
+        silver = MembershipLevel.objects.create(level_name='Silver', certificate_price=0)
+        self.customer.membership_level = silver
+        self.customer.save()
+        data = self.walkin_payload(membership_level='general', mark_paid=False)
+        with patch('api.emails.send_payment_confirmation_email'):
+            response = self.client.post('/api/walk-in', data, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        booking = Booking.objects.get(pk=response.data['booking']['id'])
+        self.assertEqual(BookingSerializer(booking).data['member_badge'], 'general')
+        self.assertEqual(BookingSerializer(booking).data['customer_type'], 'ทั่วไป')
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.membership_level_id, silver.pk)
+        detail = self.client.get('/api/walk-in', {'booking_id': booking.pk})
+        self.assertEqual(detail.data['booking']['member_badge'], 'general')
+        booking.price_snapshot = {**booking.price_snapshot, 'member_tier': 'gold'}
+        booking.save()
+        self.assertEqual(BookingSerializer(booking).data['member_badge'], 'gold')
+        self.assertEqual(BookingSerializer(booking).data['customer_type'], 'Gold')
