@@ -8,8 +8,8 @@ from .models import CheckoutPolicy, PackagePrice, ServicePackage, Customer, Cred
 CENT = Decimal('0.01')
 MEMBER_PRICE_FACTORS = {
     'general': Decimal('1'), 'silver': Decimal('1'),
-    'gold': Decimal('0.95'), '5pct': Decimal('0.95'),
-    'platinum': Decimal('0.85'), '15pct': Decimal('0.85'),
+    'platinum': Decimal('0.95'), '5pct': Decimal('0.95'),
+    'gold': Decimal('0.85'), '15pct': Decimal('0.85'),
 }
 
 def money(value):
@@ -97,6 +97,9 @@ def quote(data, customer=None, allow_missing_price=False):
                 if rate:
                     break
 
+        if tier == 'corporate' and not rate:
+            raise ValidationError('ยังไม่ได้กำหนดราคา Corporate สำหรับบริการและสินค้านี้ กรุณาตั้งราคา Corporate แยกใน Services & Pricing')
+
         # 2. Fallback to general member tier in PackagePrice if specific tier not found
         if not rate and pricing_tier != 'general':
             possible_brands = [brand] + alias_map.get(brand.lower(), [])
@@ -121,7 +124,7 @@ def quote(data, customer=None, allow_missing_price=False):
                         break
 
             if bp:
-                if tier in ('partner', 'corporate'):
+                if tier == 'partner':
                     base_amt = bp.partner_price
                 else:
                     base_amt = bp.base_price
@@ -148,7 +151,7 @@ def quote(data, customer=None, allow_missing_price=False):
         else:
             # 4. Default Category Fallback for custom/unlisted brands
             default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1000.00')
-            if tier in ('partner', 'corporate'):
+            if tier == 'partner':
                 default_base = money(default_base * Decimal('0.75'))
 
             if package.code == 'cert_90d':

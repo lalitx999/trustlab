@@ -748,8 +748,8 @@ def brand_pricing_query(request):
     return Response({
         "price_general": 1200,
         "price_silver": 1200,
-        "price_gold": 1140,
-        "price_platinum": 1020,
+        "price_gold": 1020,
+        "price_platinum": 1140,
         "price_partner": 850,
         "is_fallback": True
     }, status=status.HTTP_200_OK)

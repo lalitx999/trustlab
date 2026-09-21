@@ -608,7 +608,7 @@ def pricing_settings(request):
                 raise ValidationError('ราคา ประเภท หรือแบรนด์ไม่ถูกต้อง')
             rate_tier = str(r.get('member_tier', 'general')).strip().lower()
             if rate_tier in MEMBER_PRICE_FACTORS and rate_tier != 'general':
-                raise ValidationError('กรุณาแก้ราคาทั่วไป: Silver ราคาเท่าทั่วไป, Gold ลด 5%, Platinum ลด 15% อัตโนมัติ')
+                raise ValidationError('กรุณาแก้ราคาทั่วไป: Silver ราคาเท่าทั่วไป, Gold ลด 15%, Platinum ลด 5% อัตโนมัติ')
             PackagePrice.objects.update_or_create(package=package, category=r['category'], brand=r['brand'].strip(),
                 member_tier=rate_tier, defaults={'amount': amount})
         if d.get('package'):

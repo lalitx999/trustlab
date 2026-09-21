@@ -83,10 +83,10 @@ class BrandPricingSerializer(serializers.ModelSerializer):
     price_partner = serializers.IntegerField(source='partner_price', read_only=True)
 
     def get_price_gold(self, obj):
-        return float((obj.base_price * Decimal('0.95')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        return float((obj.base_price * Decimal('0.85')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     def get_price_platinum(self, obj):
-        return float((obj.base_price * Decimal('0.85')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+        return float((obj.base_price * Decimal('0.95')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     class Meta:
         model = BrandPricing
