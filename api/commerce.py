@@ -8,8 +8,8 @@ from .models import CheckoutPolicy, PackagePrice, ServicePackage, Customer, Cred
 CENT = Decimal('0.01')
 MEMBER_PRICE_FACTORS = {
     'general': Decimal('1'), 'silver': Decimal('1'),
-    'platinum': Decimal('0.95'), '5pct': Decimal('0.95'),
-    'gold': Decimal('0.85'), '15pct': Decimal('0.85'),
+    'gold': Decimal('0.95'), '5pct': Decimal('0.95'),
+    'platinum': Decimal('0.85'), '15pct': Decimal('0.85'),
 }
 
 def money(value):
