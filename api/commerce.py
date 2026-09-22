@@ -137,7 +137,19 @@ def quote(data, customer=None, allow_missing_price=False):
 
                 found_bp_price = Decimal(str(base_amt))  # inspection base only; cert fee added below
 
-        if rate:
+        has_manual = (
+            allow_missing_price
+            and data.get('manual_service_amount') is not None
+            and str(data.get('manual_service_amount')).strip() != ''
+        )
+        if has_manual:
+            if not str(data.get('price_reason', '')).strip():
+                raise ValidationError('กรุณาระบุเหตุผล / อ้างอิงราคาพิเศษหรือโปรโมชั่น')
+            manual_amt = money(data['manual_service_amount'])
+            amount = manual_amt
+            before_discount = manual_amt
+            discount_percent = Decimal('0')
+        elif rate:
             before_discount = rate.amount
             if factor is not None:
                 discount_percent = (Decimal('1') - factor) * 100
@@ -153,10 +165,6 @@ def quote(data, customer=None, allow_missing_price=False):
                 amount = inspection_discounted
             if factor is not None:
                 discount_percent = (Decimal('1') - factor) * 100
-        elif allow_missing_price and data.get('manual_service_amount') is not None:
-            if not str(data.get('price_reason', '')).strip():
-                raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
-            amount = money(data['manual_service_amount'])
         else:
             # 4. Default Category Fallback for custom/unlisted brands
             default_base = Decimal('1500.00') if category == 'Watch' else Decimal('1000.00')
@@ -194,7 +202,7 @@ def quote(data, customer=None, allow_missing_price=False):
             'service_amount': str(money(amount)), 'shipping_fee': str(money(shipping)), 'vat_amount': str(vat),
             'subtotal': str(money(total - vat)), 'total': str(total), 'currency': 'THB',
             'prices_include_vat': policy.prices_include_vat, 'delivery_method': delivery,
-            'price_reason': str(data.get('price_reason', '')).strip() if allow_missing_price and data.get('manual_service_amount') is not None else '',
+            'price_reason': str(data.get('price_reason', '')).strip() if (allow_missing_price and data.get('manual_service_amount') is not None and str(data.get('manual_service_amount')).strip() != '') else '',
             'policy_version': policy.updated_at.isoformat()}
 
 
