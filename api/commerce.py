@@ -63,6 +63,12 @@ def quote(data, customer=None, allow_missing_price=False):
         tier = 'general'
     discount_percent = Decimal('0')
     before_discount = None
+    # Certificate price per tier — added on top of inspection fee for cert_90d only
+    CERT_PRICE_DEFAULT = {
+        'general': Decimal('2000.00'), 'silver': Decimal('2000.00'),
+        'gold': Decimal('1200.00'), 'platinum': Decimal('1500.00'), 'partner': Decimal('1000.00'),
+    }
+    cert_price = CERT_PRICE_DEFAULT.get(tier.lower(), Decimal('2000.00'))
     if package.code == 'photo_review':
         amount = Decimal('500.00')
     else:
@@ -129,10 +135,7 @@ def quote(data, customer=None, allow_missing_price=False):
                 else:
                     base_amt = bp.base_price
 
-                if package.code == 'cert_90d':
-                    found_bp_price = max(Decimal('3000.00'), Decimal(str(base_amt)) + Decimal('1500.00'))
-                else:
-                    found_bp_price = Decimal(str(base_amt))
+                found_bp_price = Decimal(str(base_amt))  # inspection base only; cert fee added below
 
         if rate:
             before_discount = rate.amount
@@ -140,10 +143,16 @@ def quote(data, customer=None, allow_missing_price=False):
                 discount_percent = (Decimal('1') - factor) * 100
             amount = money(rate.amount * factor) if factor is not None else rate.amount
         elif found_bp_price is not None:
-            before_discount = found_bp_price
+            # Member discount applies to inspection fee only, not to certificate fee
+            inspection_discounted = money(found_bp_price * factor) if factor is not None else found_bp_price
+            if package.code == 'cert_90d':
+                before_discount = found_bp_price + cert_price
+                amount = inspection_discounted + cert_price
+            else:
+                before_discount = found_bp_price
+                amount = inspection_discounted
             if factor is not None:
                 discount_percent = (Decimal('1') - factor) * 100
-            amount = money(found_bp_price * factor) if factor is not None else found_bp_price
         elif allow_missing_price and data.get('manual_service_amount') is not None:
             if not str(data.get('price_reason', '')).strip():
                 raise ValidationError('กรุณาระบุเหตุผลราคาที่ตกลงกับลูกค้า')
@@ -154,14 +163,16 @@ def quote(data, customer=None, allow_missing_price=False):
             if tier == 'partner':
                 default_base = money(default_base * Decimal('0.75'))
 
+            # Member discount applies to inspection fee only, not to certificate fee
+            inspection_discounted = money(default_base * factor) if factor is not None else default_base
             if package.code == 'cert_90d':
-                amount = max(Decimal('3000.00'), default_base + Decimal('1500.00'))
+                before_discount = default_base + cert_price
+                amount = inspection_discounted + cert_price
             else:
-                amount = default_base
-            before_discount = amount
+                before_discount = default_base
+                amount = inspection_discounted
             if factor is not None:
                 discount_percent = (Decimal('1') - factor) * 100
-                amount = money(amount * factor)
     if before_discount is None:
         before_discount = amount
     delivery = data.get('delivery_method', 'self_pickup')
