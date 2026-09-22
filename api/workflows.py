@@ -95,9 +95,9 @@ def promptpay_quote(request):
     return Response({
         'qr_image': qr_image(value['quote']['total']),
         'amount': value['quote']['total'],
-        'bank_name': 'กสิกรไทย (KBANK)',
-        'account_name': 'บริษัท เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น (ไทยแลนด์) จำกัด',
-        'account_no': '123-4-56789-0 (รอเลขจริง)',
+        'bank_name': 'ธนาคารกสิกรไทย (KBANK)',
+        'account_name': 'บจก.เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น(ไทยแลนด์)',
+        'account_no': '238-344-8460',
         'promptpay_no': '0105569150179'
     })
 
@@ -731,11 +731,13 @@ def camera_photos(request, pk):
 
 def bank_transfer_details():
     import os
-    details = {key: os.environ.get(env, '').strip() for key, env in (
-        ('bank_name', 'PAYMENT_BANK_NAME'), ('account_name', 'PAYMENT_ACCOUNT_NAME'),
-        ('account_number', 'PAYMENT_ACCOUNT_NUMBER'),
-    )}
-    details['enabled'] = all(details.values())
+    details = {
+        'bank_name': os.environ.get('PAYMENT_BANK_NAME', '').strip() or 'ธนาคารกสิกรไทย (KBANK)',
+        'account_name': os.environ.get('PAYMENT_ACCOUNT_NAME', '').strip() or 'บจก.เซอร์ติฟิเคชั่น แอนด์ อินสเปคชั่น(ไทยแลนด์)',
+        'account_number': os.environ.get('PAYMENT_ACCOUNT_NUMBER', '').strip() or '238-344-8460',
+        'bank_logo': '/TheDaily-K-Logo-new-K-PLUS-927x1024.webp',
+        'enabled': True,
+    }
     return details
 
 
