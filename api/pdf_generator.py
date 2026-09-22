@@ -335,16 +335,40 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawString(330, cards_y + 17, "(ONLINE VERIFICATION)")
     c.restoreState()
     
-    # 7. Important Notice & Footer Notes
-    notice_y = cards_y - 20
+    # 7. Important Notice Box on Page 1 (All points formatted clearly and compactly)
+    notice_box_y = 62
+    notice_box_h = cards_y - 12 - notice_box_y
     c.saveState()
+    
+    # Background card for Important Notice
+    c.setFillColorRGB(0.985, 0.985, 0.985)
+    c.rect(40, notice_box_y, width - 80, notice_box_h, fill=True, stroke=False)
+    c.setStrokeColorRGB(0.90, 0.90, 0.90)
+    c.setLineWidth(0.5)
+    c.rect(40, notice_box_y, width - 80, notice_box_h, fill=False, stroke=True)
+    
+    # Header
     c.setFont(FONT_BOLD, 6.5)
     c.setFillColorRGB(0.15, 0.15, 0.15)
-    c.drawString(40, notice_y, "IMPORTANT NOTICE")
+    c.drawString(48, notice_box_y + notice_box_h - 12, "IMPORTANT NOTICE")
     
-    c.setFont(FONT_REGULAR, 5.5)
-    c.setFillColorRGB(0.45, 0.45, 0.45)
-    c.drawString(40, notice_y - 12, "Please read the full IMPORTANT NOTICE on the following page, which forms part of this certificate.")
+    # Render bullet points
+    notice_p_style = ParagraphStyle(
+        'NoticeP',
+        fontName=FONT_REGULAR,
+        fontSize=5.1,
+        leading=6.6,
+        textColor='#383838'
+    )
+    
+    cur_y = notice_box_y + notice_box_h - 22
+    for item in IMPORTANT_NOTICE:
+        p = Paragraph(f"• {escape(item)}", notice_p_style)
+        w_p, h_p = p.wrap(width - 96, notice_box_h)
+        p.drawOn(c, 48, cur_y - h_p)
+        cur_y -= (h_p + 3.2)
+        
+    c.restoreState()
 
     # Footer Links (Clickable URL hotspots)
     c.setFont(FONT_REGULAR, 6)
@@ -364,7 +388,6 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     c.drawRightString(width - 80, 42, "SCAN TO VERIFY")
     c.drawImage(qr_reader, width - 70, 32, width=30, height=30)
     
-    
     # 9. Watermark overlay if revoked
     if certificate.cert_status == 'revoked':
         c.saveState()
@@ -377,23 +400,6 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.drawCentredString(0, -30, "ใบรับรองนี้ถูกยกเลิกแล้ว")
         c.restoreState()
         
-    c.showPage()
-    c.setFont(FONT_BOLD, 16)
-    c.drawString(40, height - 50, "IMPORTANT NOTICE")
-    c.setFont(FONT_REGULAR, 9)
-    c.drawString(40, height - 70, f"Certificate: {certificate.cert_code or certificate.id}")
-    notice_style = ParagraphStyle('Notice', fontName=FONT_REGULAR, fontSize=10, leading=15, textColor='#333333')
-    y = height - 100
-    for text in IMPORTANT_NOTICE:
-        paragraph = Paragraph(escape(text), notice_style, bulletText='•')
-        _, paragraph_height = paragraph.wrap(width - 100, height)
-        if y - paragraph_height < 50:
-            c.showPage()
-            c.setFont(FONT_BOLD, 12)
-            c.drawString(40, height - 40, f"IMPORTANT NOTICE — {certificate.cert_code or certificate.id}")
-            y = height - 70
-        paragraph.drawOn(c, 50, y - paragraph_height)
-        y -= paragraph_height + 16
     c.showPage()
     c.save()
     

@@ -352,6 +352,8 @@ class CertificateSerializer(serializers.ModelSerializer):
     product_category_id = serializers.SerializerMethodField()
     issue_date = serializers.SerializerMethodField()
     expire_date = serializers.SerializerMethodField()
+    validity_days = serializers.SerializerMethodField()
+    service_package = serializers.CharField(source='job.service_package', read_only=True, default='')
     photos = serializers.SerializerMethodField()
     all_photos = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
@@ -362,10 +364,17 @@ class CertificateSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'certificate_id', 'job', 'cert_status', 'revoke_reason', 'expired_at',
             'created_at', 'updated_at', 'brand_name', 'model', 'category_name',
-            'product_category_id', 'issue_date', 'expire_date', 'photos', 'all_photos',
-            'branch_name', 'expert_name'
+            'product_category_id', 'issue_date', 'expire_date', 'validity_days', 'service_package',
+            'photos', 'all_photos', 'branch_name', 'expert_name'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_validity_days(self, obj):
+        if obj.validity_days:
+            return obj.validity_days
+        if obj.job and obj.job.service_package == 'cert_15d':
+            return 15
+        return 90
 
     def get_branch_name(self, obj):
         if obj.job and obj.job.booking and obj.job.booking.branch:
@@ -396,30 +405,15 @@ class CertificateSerializer(serializers.ModelSerializer):
         return obj.cert_status
 
     def get_expire_date(self, obj):
+        from django.utils import timezone
+        import datetime
         if obj.expires_at:
-            from django.utils import timezone
             return timezone.localtime(obj.expires_at).date().isoformat()
         if obj.expired_at:
-            return obj.expired_at.date().isoformat()
+            return timezone.localtime(obj.expired_at).date().isoformat()
         if obj.created_at:
-            dt = obj.created_at
-            month = dt.month + 6
-            year = dt.year
-            if month > 12:
-                month -= 12
-                year += 1
-            import datetime
-            try:
-                expire_dt = datetime.date(year, month, dt.day)
-            except ValueError:
-                if month == 2:
-                    is_leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
-                    expire_dt = datetime.date(year, month, 29 if is_leap else 28)
-                elif month in (4, 6, 9, 11):
-                    expire_dt = datetime.date(year, month, 30)
-                else:
-                    expire_dt = datetime.date(year, month, 31)
-            return expire_dt.isoformat()
+            days = self.get_validity_days(obj)
+            return (timezone.localtime(obj.created_at).date() + datetime.timedelta(days=days)).isoformat()
         return None
 
     def get_photos(self, obj):
