@@ -271,6 +271,8 @@ class JobSerializer(serializers.ModelSerializer):
     photos = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
     expert_name = serializers.SerializerMethodField()
+    delivered_at = serializers.SerializerMethodField()
+    delivered_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Job
@@ -281,9 +283,28 @@ class JobSerializer(serializers.ModelSerializer):
             'status', 'result', 'queue_no', 'payment_method', 'payment_status',
             'price', 'express_service', 'created_at', 'updated_at',
             'service_package', 'price_snapshot', 'vat_amount', 'tag_code', 'shipping_status', 'tracking_number', 'expert_source',
-            'certificate_id', 'certificate_created_at', 'cert_status', 'photos', 'branch_name', 'expert_name'
+            'certificate_id', 'certificate_created_at', 'cert_status', 'photos', 'branch_name', 'expert_name',
+            'delivered_at', 'delivered_by'
         ]
         read_only_fields = ['id', 'queue_no', 'created_at', 'updated_at']
+
+    def get_delivered_at(self, obj):
+        if obj.shipping_status != 'delivered':
+            return None
+        from .models import WorkflowEvent
+        event = WorkflowEvent.objects.filter(job=obj, action='shipping', detail__status='delivered').order_by('-created_at').first()
+        if event:
+            return event.created_at.isoformat()
+        return obj.updated_at.isoformat() if obj.updated_at else None
+
+    def get_delivered_by(self, obj):
+        if obj.shipping_status != 'delivered':
+            return None
+        from .models import WorkflowEvent
+        event = WorkflowEvent.objects.filter(job=obj, action='shipping', detail__status='delivered').select_related('actor').order_by('-created_at').first()
+        if event and event.actor:
+            return event.actor.full_name or event.actor.username
+        return "เจ้าหน้าที่หน้าร้าน (Front Desk)"
 
     def get_branch_name(self, obj):
         if obj.booking and obj.booking.branch:
