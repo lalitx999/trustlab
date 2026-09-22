@@ -70,6 +70,7 @@ urlpatterns = [
     path('jobs/<str:pk>/photos', job_photos, name='job_photos'),
 
     # 3. ใบรับรองสินค้า (Certificates) & ตรวจสาธารณะ (Verify)
+    path('payments/bank-transfer', flow.bank_transfer_config),
     path('certificates', flow.certificate_create, name='create_certificate'),
     path('certificates/<str:pk>', certificate_detail, name='certificate_detail'),
     path('certificates/<str:pk>/photos', certificate_photos_update, name='certificate_photos_update'),

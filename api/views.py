@@ -5,7 +5,7 @@ import decimal
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
-from django.db.models import Q
+from django.db.models import Q, Min
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
@@ -134,7 +134,7 @@ class JobListCreateView(APIView):
 
     def get(self, request):
         """Lists jobs. Can filter by status (e.g. in_progress, completed)"""
-        jobs = Job.objects.all().order_by('-created_at')
+        jobs = Job.objects.select_related('customer', 'booking__branch', 'certificate').order_by('-created_at')
         status_filter = request.query_params.get('status')
         if status_filter:
             jobs = jobs.filter(status=status_filter)
@@ -239,7 +239,7 @@ def send_line_flex_message(recipient_line_id, cert):
         print("⚠️ LINE Channel Access Token not configured. Simulating transmission.")
         return True
         
-    status_label = cert.cert_status.upper()
+    status_label = {'authentic': 'AUTHENTIC – ผ่านเกณฑ์', 'fake': 'NOT AUTHENTICATED – ไม่ผ่านเกณฑ์การรับรองความแท้', 'inconclusive': 'UNABLE TO AUTHENTICATE – ข้อมูลหรือผลตรวจไม่เพียงพอที่จะสรุป'}.get(cert.cert_status, cert.cert_status.upper())
     status_color = "#10B981" # Green
     if cert.cert_status == 'fake':
         status_color = "#EF4444" # Red
@@ -622,6 +622,7 @@ def customers_search(request):
     elif q:
         customers = customers.filter(Q(full_name__icontains=q) | Q(phone_number__contains=q))
         
+    customers = customers.select_related('membership_level').annotate(first_service_date=Min('job__created_at', filter=~Q(job__status='cancelled')))
     return Response(CustomerSerializer(customers, many=True).data, status=status.HTTP_200_OK)
 
 
@@ -642,6 +643,7 @@ def members_list(request):
     customers = Customer.objects.exclude(membership_level=None).order_by('-credit_balance')
     if not customers.exists():
         customers = Customer.objects.all().order_by('full_name')
+    customers = customers.select_related('membership_level').annotate(first_service_date=Min('job__created_at', filter=~Q(job__status='cancelled')))
     return Response(CustomerSerializer(customers, many=True).data, status=status.HTTP_200_OK)
 
 
@@ -926,11 +928,13 @@ def branches_list(request):
             "id": b.id,
             "name": b.name,
             "nameEn": f"BKK - {name_en}",
-            "details": "เปิดบริการทุกวัน 10:00 - 20:00 น.",
-            "detailsEn": "Open daily 10:00 AM - 8:00 PM",
+            "details": "เปิดบริการทุกวัน 11:30 - 20:30 น.",
+            "detailsEn": "Open daily 11:30 AM - 8:30 PM",
+            "open_hours": "11:30 - 20:30 น.",
+            "phone_number": "0640678666",
             "branch_id": b.id,
             "branch_name": b.name,
-            "address": "เปิดบริการทุกวัน 10:00 - 20:00 น."
+            "address": "เปิดบริการทุกวัน 11:30 - 20:30 น."
         })
     return Response(data, status=status.HTTP_200_OK)
 
@@ -945,7 +949,7 @@ def public_booking_availability(request):
     date_param = request.query_params.get('date') # YYYY-MM-DD
     
     slots = [
-        {"slot": "10:30 - 12:00", "available": True, "capacity": 3},
+        {"slot": "11:30 - 13:00", "available": True, "capacity": 3},
         {"slot": "13:00 - 14:30", "available": True, "capacity": 3},
         {"slot": "14:30 - 16:00", "available": True, "capacity": 3},
         {"slot": "16:00 - 17:30", "available": True, "capacity": 3},
@@ -1087,7 +1091,7 @@ def public_invoice_preview(request):
     COMP_ADDR_LINE1 = "388 อาคารสยามสแควร์วัน ห้อง MS1107 ชั้น 1 ถนนพระราม 1"
     COMP_ADDR_LINE2 = "แขวงปทุมวัน เขตปทุมวัน กรุงเทพมหานคร 10330"
     COMP_TAX_ID = "0105569150179"
-    COMP_TEL = "( รออัพเดทเบอร์ร้าน )"
+    COMP_TEL = "0640678666"
 
     # Base64 Logo for 100% reliable image rendering in print & server preview
     import base64

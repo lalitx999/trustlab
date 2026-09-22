@@ -11,7 +11,7 @@ import zipfile
 logger = logging.getLogger(__name__)
 from django.conf import settings
 from django.core import signing
-from django.db import transaction
+from django.db import transaction, IntegrityError
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -25,6 +25,7 @@ from .models import (Booking, BookingPhoto, Branch, Customer, Job, Certificate, 
 from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
 from .serializers import BookingSerializer, JobSerializer, CertificateSerializer, Base64ImageField
 from .commerce import money, quote, signed_quote, verify_quote, customer_for, change_credit, staff, MEMBER_PRICE_FACTORS
+from .notifications import queue_staff_notification
 from .promptpay import generate_promptpay_payload, generate_qr_code_image
 
 
@@ -177,7 +178,7 @@ def create_booking(request):
         if not str(data.get('model', '')).strip():
             raise ValidationError('กรุณาระบุรุ่นสินค้า')
         address_fields = ['return_address_name', 'return_phone', 'return_address_detail', 'return_subdistrict', 'return_district', 'return_province', 'return_postal_code']
-        address = {k: str(data.get(k, '')).strip() for k in address_fields}
+        address = {k: str(data.get(k, '')).strip() if snapshot['delivery_method'] == 'shipping' else '' for k in address_fields}
         for k, value in address.items():
             limit = Booking._meta.get_field(k).max_length or 2000
             if len(value) > limit:
@@ -185,17 +186,19 @@ def create_booking(request):
         if snapshot['delivery_method'] == 'shipping' and not all(address.values()):
             raise ValidationError('กรุณากรอกที่อยู่ส่งคืนให้ครบ')
         payment = data.get('payment_method', 'shop')
-        allowed = ('shop', 'promptpay', 'wallet', 'cash', 'credit_card', 'transfer') if IsFrontDesk().has_permission(request, None) else ('shop', 'promptpay', 'wallet')
+        allowed = ('shop', 'promptpay', 'wallet', 'cash', 'credit_card', 'transfer') if IsFrontDesk().has_permission(request, None) else ('shop', 'promptpay', 'wallet', 'transfer')
         if payment not in allowed:
             raise ValidationError('ไม่รองรับช่องทางชำระนี้')
+        if payment == 'transfer' and not is_frontdesk and not bank_transfer_details()['enabled']:
+            raise ValidationError('ช่องทางโอนบัญชียังไม่เปิด กรุณาติดต่อร้าน')
         if payment == 'wallet' and not request.user.is_authenticated:
             raise PermissionDenied('กรุณาเข้าสู่ระบบก่อนใช้เครดิต')
         evidence = image_data(data.get('slip_base64')) if data.get('slip_base64') and payment in ('promptpay', 'transfer') else ''
-        if payment == 'promptpay' and not evidence and not is_frontdesk:
+        if payment in ('promptpay', 'transfer') and not evidence and not is_frontdesk:
             raise ValidationError('กรุณาแนบสลิปชำระเงิน')
-        is_paid_initial = bool(data.get('mark_paid') or data.get('paid') or payment == 'wallet')
+        is_paid_initial = payment == 'wallet' or (is_frontdesk and bool(data.get('mark_paid') or data.get('paid')))
         payment_status_val = 'pending_review' if evidence else ('paid' if is_paid_initial else 'unpaid')
-        booking_status_val = 'confirmed' if is_paid_initial else 'pending'
+        booking_status_val = 'confirmed' if payment_status_val == 'paid' else 'pending'
 
         # Resolve the required FK for every intake, including an empty service catalog.
         service, _ = ServiceType.objects.get_or_create(
@@ -213,7 +216,9 @@ def create_booking(request):
             change_credit(customer, -money(snapshot['total']), f'booking:{booking.pk}', 'ชำระค่าบริการ', request.user)
             record(request, 'wallet_payment', booking=booking, amount=snapshot['total'])
 
-        if is_paid_initial:
+        if booking.payment_status == 'paid':
+            if payment != 'wallet':
+                record(request, 'counter_payment', booking=booking, method=payment, amount=snapshot['total'], reference=str(data.get('reference', '')).strip())
             schedule_payment_confirmation(booking)
 
         photos = data.get('photos', [])
@@ -224,6 +229,7 @@ def create_booking(request):
         for photo in photos:
             image_data(photo)
             BookingPhoto.objects.create(booking=booking, photo=Base64ImageField().run_validation(photo), photo_type='customer')
+        queue_staff_notification(f'booking:{booking.pk}:created', 'booking_created', {'booking_id': booking.pk}, channels=('line',))
         return Response({'booking_id': booking.pk, 'status': booking.status, 'payment_status': booking.payment_status, 'quote': snapshot,
                          'receipt_token': signing.dumps({'booking_id': booking.pk, 'request_key': str(booking.request_key)}, salt='receipt')}, status=201)
 
@@ -267,6 +273,7 @@ def receive_booking(request, pk):
         payment_method=booking.payment_method, payment_status=booking.payment_status,
         shipping_status='pending_return' if booking.delivery_method == 'shipping' else 'not_applicable')
     record(request, 'check_in', booking=booking, job=job)
+    queue_staff_notification(f'job:{job.pk}:created', 'job_created', {'job_id': job.pk, 'booking_id': booking.pk})
     return Response(JobSerializer(job).data, status=201)
 
 
@@ -279,7 +286,12 @@ def issue(job, custom_code=None):
             days = int(job.price_snapshot['validity_days'])
         except (ValueError, TypeError):
             pass
-    code_to_use = custom_code or job.tag_code or f'TL-{uuid.uuid4().hex[:12].upper()}'
+    custom_code = str(custom_code or '').strip()
+    if len(custom_code) > 50 or any(c in custom_code for c in '/?#'):
+        raise ValidationError('เลขใบเซอร์ต้องไม่เกิน 50 ตัวอักษร และไม่มี / ? #')
+    if custom_code and Certificate.objects.filter(cert_code=custom_code).exclude(job=job).exists():
+        raise ValidationError('เลขใบเซอร์นี้ถูกใช้แล้ว กรุณาใช้เลขอื่น')
+    code_to_use = custom_code or f'TL-{uuid.uuid4().hex[:12].upper()}'
     cert_status = 'authentic' if job.result == 'authentic' else 'unauthentic'
     cert, created = Certificate.objects.get_or_create(job=job, defaults={
         'cert_code': code_to_use,
@@ -288,11 +300,11 @@ def issue(job, custom_code=None):
         'expires_at': timezone.now() + datetime.timedelta(days=days)
     })
     if not created:
-        if cert.cert_status != cert_status:
+        if cert.cert_status not in ('revoked', 'expired') and cert.cert_status != cert_status:
             cert.cert_status = cert_status
             cert.save(update_fields=['cert_status'])
-        if (custom_code or job.tag_code):
-            target = custom_code or job.tag_code
+        if custom_code:
+            target = custom_code
             if target and cert.cert_code != target:
                 cert.cert_code = target
                 cert.save(update_fields=['cert_code'])
@@ -307,7 +319,11 @@ def certificate_create(request):
     if not job_id:
         raise ValidationError('กรุณาระบุ job_id')
     job = get_object_or_404(Job.objects.select_for_update(), pk=pk_value(job_id))
-    cert = issue(job, custom_code=request.data.get('cert_code'))
+    try:
+        with transaction.atomic():
+            cert = issue(job, custom_code=request.data.get('cert_code'))
+    except IntegrityError:
+        raise ValidationError('เลขใบเซอร์ซ้ำ กรุณาใช้เลขอื่น')
     record(request, 'issue_certificate', job=job, cert_code=cert.cert_code)
     return Response(CertificateSerializer(cert).data, status=201)
 
@@ -327,6 +343,7 @@ def job_update(request, pk):
         Booking.objects.select_for_update().filter(pk=job.booking_id).first()
     if job.status == 'cancelled':
         raise ValidationError('งานถูกยกเลิกแล้ว')
+    previous_stage = (job.status, job.result, job.expert_source)
     result = request.data.get('result', job.result)
     if result == 'pending':
         result = None
@@ -366,6 +383,8 @@ def job_update(request, pk):
         from .emails import send_inspection_result_email
         send_inspection_result_email(job)
     record(request, 'inspection', job=job, result=result, status=state, expert_source=job.expert_source)
+    if previous_stage != (job.status, job.result, job.expert_source):
+        queue_staff_notification(f'job:{job.pk}:updated:{job.updated_at.isoformat()}', 'job_updated', {'job_id': job.pk, 'booking_id': job.booking_id, 'status': job.status, 'result': job.result})
     if job.booking and state == 'completed':
         job.booking.status = 'completed'
         job.booking.save(update_fields=['status'])
@@ -700,53 +719,98 @@ def camera_photos(request, pk):
     if sum(len(p) for p in photos if isinstance(p, str)) > 40 * 1024 * 1024:
         raise ValidationError('ภาพรวมเกิน 30 MB กรุณาแบ่งอัปโหลดเป็นชุดเล็ก')
     decoded = [Base64ImageField().run_validation(image_data(p)) for p in photos]
+    photo_ids = []
     for value in decoded:
-        BookingPhoto.objects.create(booking=booking, photo=value, photo_type='staff')
+        photo = BookingPhoto.objects.create(booking=booking, photo=value, photo_type='staff')
+        photo_ids.append(photo.pk)
+    job = Job.objects.filter(booking=booking).first()
+    queue_staff_notification(f'photos:{photo_ids[0]}:{photo_ids[-1]}', 'staff_photos_added', {'booking_id': booking.pk, 'job_id': job.pk if job else None, 'photo_ids': photo_ids}, channels=('wechat',))
     record(request, 'photos_added', booking=booking, count=len(decoded))
     return Response({'added': len(decoded)}, status=201)
 
 
-def daily_stats():
-    today = timezone.localdate()
-    jobs = Job.objects.filter(created_at__date=today)
+def bank_transfer_details():
+    import os
+    details = {key: os.environ.get(env, '').strip() for key, env in (
+        ('bank_name', 'PAYMENT_BANK_NAME'), ('account_name', 'PAYMENT_ACCOUNT_NAME'),
+        ('account_number', 'PAYMENT_ACCOUNT_NUMBER'),
+    )}
+    details['enabled'] = all(details.values())
+    return details
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bank_transfer_config(request):
+    return Response(bank_transfer_details())
+
+
+def report_period(request):
+    try:
+        month = request.query_params.get('month')
+        if month:
+            start = datetime.date.fromisoformat(month + '-01')
+            end = (start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+        else:
+            start = datetime.date.fromisoformat(request.query_params.get('date_from') or timezone.localdate().isoformat())
+            end = datetime.date.fromisoformat(request.query_params.get('date_to') or start.isoformat())
+        if start > end:
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise ValidationError('กรุณาระบุช่วงวันที่ให้ถูกต้อง โดยวันเริ่มต้นไม่เกินวันสิ้นสุด')
+    return start, end
+
+
+def daily_stats(start=None, end=None):
+    today = start or timezone.localdate()
+    end = end or today
+    jobs = Job.objects.filter(created_at__date__range=(today, end))
     stats = {'total_jobs': jobs.count(), 'completed_jobs': jobs.filter(status='completed').count(),
              'authentic_jobs': jobs.filter(result='authentic').count(), 'fake_jobs': jobs.filter(result='fake').count(),
              'inconclusive_jobs': jobs.filter(result='inconclusive').count()}
     amounts = {k: money(0) for k in ('revenue_cash', 'revenue_transfer', 'revenue_card', 'revenue_promptpay', 'revenue_member')}
     mapping = {'cash': 'revenue_cash', 'transfer': 'revenue_transfer', 'credit_card': 'revenue_card', 'promptpay': 'revenue_promptpay', 'wallet': 'revenue_member', 'credit_balance': 'revenue_member'}
-    paid_events = WorkflowEvent.objects.filter(created_at__date=today, action__in=['wallet_payment', 'counter_payment', 'payment_approve']).select_related('booking')
+    paid_events = WorkflowEvent.objects.filter(created_at__date__range=(today, end), action__in=['wallet_payment', 'counter_payment', 'payment_approve']).select_related('booking')
+    shipping_received = money(0)
     seen = set()
     for event in paid_events:
         b = event.booking
         if b and b.pk not in seen and b.payment_method in mapping:
             amounts[mapping[b.payment_method]] += money(b.price_snapshot['total'])
+            shipping_received += money(b.price_snapshot.get('shipping_fee', 0))
             seen.add(b.pk)
     # Legacy rows have no payment timestamp: keep their existing received-day convention,
     # but never count unpaid jobs or duplicate a new workflow booking.
     for job in jobs.filter(payment_status='paid', price_snapshot={}):
+        if job.booking_id in seen:
+            continue
         if job.payment_method in mapping:
             amounts[mapping[job.payment_method]] += job.price
-    refunds = sum((money(e.detail.get('amount', 0)) for e in WorkflowEvent.objects.filter(created_at__date=today, action='refund_paid_out')), money(0))
+    refunds = sum((money(e.detail.get('amount', 0)) for e in WorkflowEvent.objects.filter(created_at__date__range=(today, end), action='refund_paid_out')), money(0))
     gross = sum(amounts.values(), money(0))
     stats.update({k: float(v) for k, v in amounts.items()})
-    stats.update(gross_revenue=float(gross), refunds=float(refunds), total_revenue=float(gross-refunds))
+    stats.update(shipping_received=float(shipping_received), gross_revenue=float(gross), refunds=float(refunds), total_revenue=float(gross-refunds))
     return today, stats
 
 
 @api_view(['GET'])
 @permission_classes([IsStaff])
 def daily_report(request):
-    today, stats = daily_stats()
-    return Response({'date': today.strftime('%d/%m/%Y'), 'stats': stats})
+    start, end = report_period(request)
+    _, stats = daily_stats(start, end)
+    label = start.strftime('%d/%m/%Y') if start == end else f'{start:%d/%m/%Y} - {end:%d/%m/%Y}'
+    return Response({'date': label, 'date_from': start.isoformat(), 'date_to': end.isoformat(), 'stats': stats})
 
 
 @api_view(['GET'])
 @permission_classes([IsStaff])
 def daily_report_pdf(request):
     from .pdf_generator import generate_daily_report_pdf
-    today, stats = daily_stats()
-    response = HttpResponse(generate_daily_report_pdf(stats, today.strftime('%d/%m/%Y')).getvalue(), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="daily-report-{today.isoformat()}.pdf"'
+    start, end = report_period(request)
+    _, stats = daily_stats(start, end)
+    label = start.strftime('%d/%m/%Y') if start == end else f'{start:%d/%m/%Y} - {end:%d/%m/%Y}'
+    response = HttpResponse(generate_daily_report_pdf(stats, label).getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="report-{start.isoformat()}-{end.isoformat()}.pdf"'
     return response
 
 
@@ -833,8 +897,6 @@ def walkin(request):
             for f in ('serial_number', 'tag_code', 'color', 'material', 'accessories', 'notes', 'expert_instruction'):
                 if f in data:
                     setattr(job, f, str(data[f]).strip())
-            if 'cert_code' in data and data['cert_code']:
-                job.tag_code = str(data['cert_code']).strip()
             if 'brand' in data or 'brand_name' in data:
                 job.brand = str(data.get('brand') or data.get('brand_name')).strip()
             if 'model' in data:
@@ -843,11 +905,6 @@ def walkin(request):
                 job.category = str(data['category']).strip()
             job.save()
 
-            if job.tag_code:
-                cert = Certificate.objects.filter(job=job).first()
-                if cert and cert.cert_code != job.tag_code:
-                    cert.cert_code = job.tag_code
-                    cert.save(update_fields=['cert_code'])
         booking.refresh_from_db()
         return Response(walkin_detail(booking, request), status=200)
 

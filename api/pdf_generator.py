@@ -7,6 +7,10 @@ from reportlab.lib.utils import ImageReader
 import qrcode
 from django.conf import settings
 from django.utils import timezone
+from reportlab.platypus import Paragraph
+from reportlab.lib.styles import ParagraphStyle
+from xml.sax.saxutils import escape
+from .service_terms import IMPORTANT_NOTICE
 
 # We will use Helvetica and Helvetica-Bold for professional look
 FONT_REGULAR = "Helvetica"
@@ -142,6 +146,7 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     # 4. Left Column: Result & Product Images
     job = certificate.job
     is_authentic = (getattr(job, 'result', '') == 'authentic')
+    result_label = 'AUTHENTIC' if is_authentic else ('NOT AUTHENTICATED' if getattr(job, 'result', '') == 'fake' else 'UNABLE TO AUTHENTICATE')
     
     c.saveState()
     if is_authentic:
@@ -166,7 +171,8 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.line(46, height - 171, 54, height - 179)
         
         c.setFont(FONT_BOLD, 12.5)
-        c.drawString(64, height - 179, "UNAUTHENTIC / FAIL")
+        c.setFont(FONT_BOLD, 10)
+        c.drawString(64, height - 179, result_label)
     c.restoreState()
     
     # Large Product Main Image Box
@@ -177,10 +183,10 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.saveState()
         c.setFillColorRGB(0.85, 0.15, 0.15)
         c.setFillAlpha(0.2)
-        c.setFont(FONT_BOLD, 28)
+        c.setFont(FONT_BOLD, 16)
         c.translate(160, height - 280)
         c.rotate(-25)
-        c.drawCentredString(0, 0, "UNAUTHENTIC")
+        c.drawCentredString(0, 0, result_label)
         c.restoreState()
     
     # Two Thumbnail Sub Images Box
@@ -338,15 +344,8 @@ def generate_certificate_pdf(certificate) -> BytesIO:
     
     c.setFont(FONT_REGULAR, 5.5)
     c.setFillColorRGB(0.45, 0.45, 0.45)
-    bullets = [
-        "This result is based on visual and laboratory inspection using current data and available reference standards.",
-        "Results do not guarantee identification of all modifications, repairs, or replaced parts.",
-        "This certificate confirms the authenticity of the item examined by TRUST LAB THAILAND based on the standard inspection process.",
-        "This certificate does not represent a guarantee of the item or any affiliated brand."
-    ]
-    for idx, bullet in enumerate(bullets):
-        c.drawString(40, notice_y - 10 - (idx * 9), f"•  {bullet}")
-        
+    c.drawString(40, notice_y - 12, "Please read the full IMPORTANT NOTICE on the following page, which forms part of this certificate.")
+
     # Footer Links (Clickable URL hotspots)
     c.setFont(FONT_REGULAR, 6)
     c.setFillColorRGB(0.2, 0.2, 0.2)
@@ -378,6 +377,23 @@ def generate_certificate_pdf(certificate) -> BytesIO:
         c.drawCentredString(0, -30, "ใบรับรองนี้ถูกยกเลิกแล้ว")
         c.restoreState()
         
+    c.showPage()
+    c.setFont(FONT_BOLD, 16)
+    c.drawString(40, height - 50, "IMPORTANT NOTICE")
+    c.setFont(FONT_REGULAR, 9)
+    c.drawString(40, height - 70, f"Certificate: {certificate.cert_code or certificate.id}")
+    notice_style = ParagraphStyle('Notice', fontName=FONT_REGULAR, fontSize=10, leading=15, textColor='#333333')
+    y = height - 100
+    for text in IMPORTANT_NOTICE:
+        paragraph = Paragraph(escape(text), notice_style, bulletText='•')
+        _, paragraph_height = paragraph.wrap(width - 100, height)
+        if y - paragraph_height < 50:
+            c.showPage()
+            c.setFont(FONT_BOLD, 12)
+            c.drawString(40, height - 40, f"IMPORTANT NOTICE — {certificate.cert_code or certificate.id}")
+            y = height - 70
+        paragraph.drawOn(c, 50, y - paragraph_height)
+        y -= paragraph_height + 16
     c.showPage()
     c.save()
     

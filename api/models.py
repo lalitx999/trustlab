@@ -460,3 +460,16 @@ class CancellationRequest(models.Model):
     refund_status = models.CharField(max_length=20, default='not_required')
     refund_reference = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class StaffNotification(models.Model):
+    """Pending staff notifications; dispatch is disabled until recipients are confirmed."""
+    event_key = models.CharField(max_length=160)
+    channel = models.CharField(max_length=20, choices=[('line', 'LINE'), ('wechat', 'WeChat')])
+    event_type = models.CharField(max_length=40)
+    payload = models.JSONField(default=dict)
+    status = models.CharField(max_length=32, default='awaiting_configuration')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['event_key', 'channel'], name='unique_staff_notification_event')]

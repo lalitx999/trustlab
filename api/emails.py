@@ -158,13 +158,13 @@ def send_inspection_result_email(job):
     job_no = getattr(job, 'job_id', f"JOB-{job.pk}")
     brand = job.brand or '-'
     model = job.model or '-'
-    result = job.result or 'authentic'
+    result = job.result or ''
 
-    badge_html = '<span class="badge-authentic">✓ ตรวจผ่าน - ของแท้ (AUTHENTIC)</span>'
+    badge_html = '<span class="badge-authentic">AUTHENTIC – ผ่านเกณฑ์</span>'
     if result == 'fake':
-        badge_html = '<span class="badge-fake">✕ ไม่ผ่านเกณฑ์ - ผลปลอม (UNAUTHENTIC)</span>'
-    elif result == 'inconclusive':
-        badge_html = '<span class="badge-inconclusive">? ไม่ชัดเจน (INCONCLUSIVE)</span>'
+        badge_html = '<span class="badge-fake">NOT AUTHENTICATED – ไม่ผ่านเกณฑ์การรับรองความแท้</span>'
+    elif result != 'authentic':
+        badge_html = '<span class="badge-inconclusive">UNABLE TO AUTHENTICATE – ข้อมูลหรือผลตรวจไม่เพียงพอที่จะสรุป</span>'
 
     cert_code = job.tag_code or (getattr(job, 'certificate', None) and job.certificate.cert_code) or '-'
     verify_url = f"{PUBLIC_SITE_URL}/verify?id={cert_code}" if cert_code != '-' else PUBLIC_SITE_URL
@@ -213,7 +213,7 @@ def send_certificate_email(cert, recipient_email=None):
     model = cert.job.model if cert.job else '-'
     status = cert.cert_status
     
-    status_text = 'ของแท้ (AUTHENTIC)' if status == 'authentic' else ('ผลไม่ผ่าน (UNAUTHENTIC)' if status in ('fake', 'unauthentic') else status.upper())
+    status_text = 'AUTHENTIC – ผ่านเกณฑ์' if status == 'authentic' else ('NOT AUTHENTICATED – ไม่ผ่านเกณฑ์การรับรองความแท้' if status in ('fake', 'unauthentic') else status.upper())
     verify_url = f"{PUBLIC_SITE_URL}/verify?id={cert_code}"
     pdf_url = f"{settings.API_BASE_URL}/certificates/{cert_code}/pdf" if hasattr(settings, 'API_BASE_URL') else f"{PUBLIC_SITE_URL}/api/certificates/{cert_code}/pdf"
 

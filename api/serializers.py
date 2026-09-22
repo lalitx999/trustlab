@@ -100,6 +100,13 @@ class ServiceTypeSerializer(serializers.ModelSerializer):
 
 
 class CustomerSerializer(serializers.ModelSerializer):
+    first_service_at = serializers.SerializerMethodField()
+
+    def get_first_service_at(self, obj):
+        if hasattr(obj, 'first_service_date'):
+            return obj.first_service_date
+        return obj.job_set.exclude(status='cancelled').order_by('created_at').values_list('created_at', flat=True).first()
+
     membership_level_name = serializers.CharField(source='membership_level.level_name', read_only=True)
     discount_pct = serializers.DecimalField(source='membership_level.discount_pct', max_digits=5, decimal_places=2, read_only=True)
 
@@ -109,7 +116,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             'id', 'full_name', 'phone_number', 'line_id', 'email',
             'membership_level', 'membership_level_name', 'discount_pct',
             'credit_balance', 'account_type', 'postpaid_enabled', 'credit_limit',
-            'note', 'created_at'
+            'note', 'created_at', 'first_service_at'
         ]
         read_only_fields = ['id', 'credit_balance', 'created_at']
 
@@ -121,6 +128,15 @@ class BookingPhotoSerializer(serializers.ModelSerializer):
 
 
 class BookingSerializer(serializers.ModelSerializer):
+    job_id = serializers.SerializerMethodField()
+    certificate_id = serializers.CharField(source='job.certificate.cert_code', read_only=True, default=None)
+
+    def get_job_id(self, obj):
+        try:
+            return JobSerializer().get_job_id(obj.job)
+        except Job.DoesNotExist:
+            return None
+
     inspection_result = serializers.CharField(source='job.result', read_only=True, default=None)
     photos = BookingPhotoSerializer(many=True, read_only=True)
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
@@ -143,7 +159,7 @@ class BookingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Booking
         fields = [
-            'id', 'booking_id', 'customer', 'customer_name', 'customer_phone',
+            'id', 'booking_id', 'job_id', 'certificate_id', 'customer', 'customer_name', 'customer_phone',
             'customer_email', 'customer_line', 'customer_type', 'customer_credit_balance',
             'customer_discount_percent', 'member_badge',
             'branch', 'branch_name', 'booking_date', 'booking_time', 'time_slot',
@@ -237,6 +253,14 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 class JobSerializer(serializers.ModelSerializer):
+    customer_email = serializers.CharField(source='customer.email', read_only=True, default='')
+    customer_line = serializers.CharField(source='customer.line_id', read_only=True, default='')
+    booking_id = serializers.SerializerMethodField()
+    certificate_created_at = serializers.DateTimeField(source='certificate.created_at', read_only=True, default=None)
+
+    def get_booking_id(self, obj):
+        return BookingSerializer().get_booking_id(obj.booking) if obj.booking_id else None
+
     job_id = serializers.SerializerMethodField()
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
@@ -251,13 +275,13 @@ class JobSerializer(serializers.ModelSerializer):
     class Meta:
         model = Job
         fields = [
-            'id', 'job_id', 'booking', 'customer', 'customer_name', 'customer_phone',
+            'id', 'job_id', 'booking', 'booking_id', 'customer', 'customer_name', 'customer_phone', 'customer_email', 'customer_line',
             'category', 'category_name', 'brand', 'brand_name', 'sub_category', 'model', 'color', 'material',
             'serial_number', 'accessories', 'notes', 'expert_instruction',
             'status', 'result', 'queue_no', 'payment_method', 'payment_status',
             'price', 'express_service', 'created_at', 'updated_at',
             'service_package', 'price_snapshot', 'vat_amount', 'tag_code', 'shipping_status', 'tracking_number', 'expert_source',
-            'certificate_id', 'cert_status', 'photos', 'branch_name', 'expert_name'
+            'certificate_id', 'certificate_created_at', 'cert_status', 'photos', 'branch_name', 'expert_name'
         ]
         read_only_fields = ['id', 'queue_no', 'created_at', 'updated_at']
 
