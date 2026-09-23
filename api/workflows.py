@@ -497,7 +497,7 @@ def cancel_request(request, pk):
 
 
 @api_view(['POST'])
-@permission_classes([IsAdministrator])
+@permission_classes([IsFrontDesk])
 @transaction.atomic
 def cancel_review(request, pk):
     item = get_object_or_404(CancellationRequest.objects.select_for_update(), pk=pk)
@@ -536,6 +536,15 @@ def cancel_review(request, pk):
     item.save()
     record(request, 'cancel_' + action, booking=booking, refund_amount=str(amount))
     return Response({'status': item.status})
+
+
+@api_view(['POST'])
+@permission_classes([IsFrontDesk])
+@transaction.atomic
+def booking_cancel_review(request, pk):
+    booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(pk))
+    item = get_object_or_404(CancellationRequest.objects.select_for_update(), booking=booking)
+    return cancel_review(request, item.pk)
 
 
 @api_view(['POST'])

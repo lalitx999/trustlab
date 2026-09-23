@@ -56,6 +56,7 @@ urlpatterns = [
     path('bookings/<int:pk>/payment-review', flow.payment_review),
     path('bookings/<int:pk>/counter-payment', flow.counter_payment),
     path('cancellations/<int:pk>/review', flow.cancel_review),
+    path('bookings/<str:pk>/cancel-review', flow.booking_cancel_review),
     path('topups/<int:pk>/review', flow.topup_review),
     path('jobs/<str:pk>/label', flow.shipping_label),
     path('jobs/<str:pk>/shipping', flow.shipping_update),
