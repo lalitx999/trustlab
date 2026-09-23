@@ -258,7 +258,7 @@ class Job(models.Model):
         ('photo_review', 'ตรวจสอบผ่านรูปภาพ (Photo Review)'),
     ]
     
-    booking = models.OneToOneField(Booking, on_delete=models.SET_NULL, null=True, blank=True)
+    booking = models.OneToOneField(Booking, on_delete=models.CASCADE, null=True, blank=True)
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE)
     category = models.CharField(max_length=50) # e.g. Bag, Clothes, Shoes, Accessories, Watch
     brand = models.CharField(max_length=100)
@@ -442,8 +442,8 @@ class CreditEntry(models.Model):
 
 
 class WorkflowEvent(models.Model):
-    booking = models.ForeignKey(Booking, on_delete=models.PROTECT, null=True, blank=True)
-    job = models.ForeignKey(Job, on_delete=models.PROTECT, null=True, blank=True)
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, null=True, blank=True)
+    job = models.ForeignKey(Job, on_delete=models.CASCADE, null=True, blank=True)
     actor = models.ForeignKey(StaffUser, on_delete=models.PROTECT)
     action = models.CharField(max_length=50)
     detail = models.JSONField(default=dict)
@@ -451,7 +451,7 @@ class WorkflowEvent(models.Model):
 
 
 class CancellationRequest(models.Model):
-    booking = models.OneToOneField(Booking, on_delete=models.PROTECT)
+    booking = models.OneToOneField(Booking, on_delete=models.CASCADE)
     reason = models.TextField()
     status = models.CharField(max_length=20, default='pending')
     requested_by = models.ForeignKey(StaffUser, on_delete=models.PROTECT, related_name='cancellation_requests')

@@ -712,7 +712,7 @@ class BrandListCreateView(APIView):
 
 
 class BrandDeleteView(APIView):
-    permission_classes = [IsAdministrator]
+    permission_classes = [IsStaff]
 
     def delete(self, request, pk):
         brand = get_object_or_404(Brand, pk=pk)

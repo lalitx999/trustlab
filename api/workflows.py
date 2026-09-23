@@ -625,7 +625,8 @@ def pricing_settings(request):
             if fee < 0:
                 raise ValidationError('ค่าส่งต้องไม่ติดลบ')
             policy.shipping_fee = fee
-        policy.save()
+        if d.get('delete_rate_id'):
+            PackagePrice.objects.filter(pk=d['delete_rate_id']).delete()
         if d.get('rate'):
             r = d['rate']
             package = get_object_or_404(ServicePackage, code=r.get('package'))
