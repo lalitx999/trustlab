@@ -1160,13 +1160,6 @@ def public_invoice_preview(request):
 <div class="center">
   <img src="{logo_src}" alt="Trust Lab" style="height:32px;margin-bottom:4px;" />
   <div class="logo-text">TRUST LAB THAILAND</div>
-  <div style="font-size:8.5px;color:#444;line-height:1.3;margin-top:4px;">
-    {COMP_NAME}<br>
-    {COMP_ADDR_LINE1}<br>
-    {COMP_ADDR_LINE2}<br>
-    เลขประจำตัวผู้เสียภาษี {COMP_TAX_ID}<br>
-    โทร. {COMP_TEL}
-  </div>
 </div>
 <div class="sep"></div>
 <div class="center" style="font-size:12px;font-weight:700;margin:4px 0;">ใบกำกับภาษีอย่างย่อ / ใบเสร็จรับเงิน</div>
