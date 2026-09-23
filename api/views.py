@@ -1060,6 +1060,7 @@ def public_invoice_preview(request):
     cname = customer.get('name', '-')
     caddress = customer.get('address', '-')
     ctax_id = customer.get('taxId', '-')
+    cbranch = customer.get('branch', '')
     ccontact = customer.get('contactPerson', cname)
     cphone = customer.get('phone', '-')
     cemail = customer.get('email', '-')
@@ -1266,10 +1267,10 @@ def public_invoice_preview(request):
               <!-- Customer Info Section -->
               <div class="customer-box">
                 <div style="flex:1.2;">
-                  <div class="cust-label">ลูกค้า</div>
-                  <div class="cust-name">{cname}</div>
+                  <div class="cust-label">ลูกค้า / ผู้ซื้อ</div>
+                  <div class="cust-name">{cname} {f'({cbranch})' if cbranch and cbranch != '-' else ''}</div>
                   <div class="cust-info">{caddress}</div>
-                   <div class="cust-info" style="margin-top:4px;"><strong>เลขประจำตัวผู้เสียภาษีลูกค้า:</strong> {ctax_id if ctax_id and ctax_id != '-' else '-'}</div>
+                  <div class="cust-info" style="margin-top:4px;"><strong>เลขประจำตัวผู้เสียภาษี:</strong> {ctax_id if ctax_id and ctax_id != '-' else '-'}</div>
                 </div>
                 <div style="flex:0.8;border-left:1px solid #e5e7eb;padding-left:16px;">
                   <div class="cust-info"><strong>ชื่อผู้ติดต่อ:</strong> {ccontact}</div>
