@@ -707,13 +707,28 @@ def booking_receipt(request):
                      'shipping_status': job.shipping_status if job else None})
 
 
-@api_view(['GET', 'POST'])
+@api_view(['GET', 'POST', 'DELETE'])
 @permission_classes([IsStaff])
 @transaction.atomic
 def camera_photos(request, pk):
     booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(pk))
     if request.method == 'GET':
         return Response({kind: [request.build_absolute_uri(p.photo.url) for p in booking.photos.filter(photo_type=kind)] for kind in ('customer', 'staff')})
+    if request.method == 'DELETE':
+        photo_id = request.data.get('photo_id') or request.query_params.get('photo_id')
+        if not photo_id:
+            raise ValidationError('กรุณาระบุรหัสรูปภาพที่ต้องการลบ')
+        photo = get_object_or_404(BookingPhoto, pk=photo_id, booking=booking)
+        job = Job.objects.filter(booking=booking).first()
+        if job and hasattr(job, 'certificate') and job.certificate:
+            cert = job.certificate
+            if photo.id in cert.selected_photos:
+                cert.selected_photos = [pid for pid in cert.selected_photos if pid != photo.id]
+                cert.save()
+        photo.delete()
+        record(request, 'photo_deleted', booking=booking, photo_id=photo_id)
+        return Response({'status': 'success', 'message': 'ลบรูปภาพเรียบร้อย'}, status=200)
+
     photos = request.data.get('photos', [])
     if not isinstance(photos, list) or not photos or len(photos) + booking.photos.filter(photo_type='staff').count() > 30:
         raise ValidationError('แนบภาพเจ้าหน้าที่ได้สูงสุด 30 ภาพต่อรายการ')
@@ -728,6 +743,23 @@ def camera_photos(request, pk):
     queue_staff_notification(f'photos:{photo_ids[0]}:{photo_ids[-1]}', 'staff_photos_added', {'booking_id': booking.pk, 'job_id': job.pk if job else None, 'photo_ids': photo_ids}, channels=('wechat',))
     record(request, 'photos_added', booking=booking, count=len(decoded))
     return Response({'added': len(decoded)}, status=201)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsStaff])
+@transaction.atomic
+def delete_booking_photo(request, pk, photo_id):
+    booking = get_object_or_404(Booking, pk=pk_value(pk))
+    photo = get_object_or_404(BookingPhoto, pk=photo_id, booking=booking)
+    job = Job.objects.filter(booking=booking).first()
+    if job and hasattr(job, 'certificate') and job.certificate:
+        cert = job.certificate
+        if photo.id in cert.selected_photos:
+            cert.selected_photos = [pid for pid in cert.selected_photos if pid != photo.id]
+            cert.save()
+    photo.delete()
+    record(request, 'photo_deleted', booking=booking, photo_id=photo_id)
+    return Response({'status': 'success', 'message': 'ลบรูปภาพเรียบร้อย'}, status=200)
 
 
 def bank_transfer_details():

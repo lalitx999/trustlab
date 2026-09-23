@@ -87,6 +87,7 @@ urlpatterns = [
     path('bookings/<str:pk>/cancel', flow.cancel_request, name='booking_cancel'),
     path('bookings/<str:pk>', booking_detail, name='booking_detail'),
     path('bookings/<str:pk>/photos', flow.camera_photos, name='booking_photos'),
+    path('bookings/<str:pk>/photos/<int:photo_id>', flow.delete_booking_photo, name='booking_photo_delete'),
 
     # 5. ลูกค้า สมาชิก และเครดิต (Customers & Members)
     path('customers', customer_create, name='customer_create'),
