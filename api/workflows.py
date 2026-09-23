@@ -460,16 +460,40 @@ def receive_payment(request, pk):
 
 
 @api_view(['PUT', 'POST'])
-@permission_classes([IsFrontDesk])
+@permission_classes([AllowAny])
 @transaction.atomic
 def cancel_request(request, pk):
     booking = get_object_or_404(Booking.objects.select_for_update(), pk=pk_value(pk))
     reason = str(request.data.get('cancel_reason', '')).strip()
-    if not reason or booking.status == 'cancelled':
-        raise ValidationError('กรุณาระบุเหตุผล/ตรวจสอบสถานะรายการ')
-    item, _ = CancellationRequest.objects.get_or_create(booking=booking, defaults={'reason': reason, 'requested_by': request.user})
+    if not reason:
+        reason = 'ลูกค้ายกเลิกการจอง'
+    if booking.status == 'cancelled':
+        raise ValidationError('รายการนี้ถูกยกเลิกไปแล้ว')
+
+    actor = request.user if getattr(request, 'user', None) and request.user.is_authenticated and isinstance(request.user, StaffUser) else None
+    direct = request.data.get('direct_cancel', False) or (actor and (actor.is_superuser or getattr(actor, 'role', '') in ('admin', 'manager'))) or booking.payment_status != 'paid'
+
+    if direct:
+        booking.status = 'cancelled'
+        booking.cancel_reason = reason
+        booking.cancelled_by = actor
+        booking.cancelled_at = timezone.now()
+        booking.save()
+        Job.objects.filter(booking=booking).update(status='cancelled', cancel_reason=reason, cancelled_by=actor, cancelled_at=timezone.now())
+        Certificate.objects.filter(job__booking=booking).update(cert_status='revoked', revoke_reason=reason)
+        item, _ = CancellationRequest.objects.update_or_create(
+            booking=booking,
+            defaults={'reason': reason, 'status': 'approved', 'requested_by': actor, 'reviewed_by': actor, 'refund_status': 'not_required', 'refund_amount': 0}
+        )
+        record(request, 'cancel_approved', booking=booking, reason=reason)
+        return Response({'id': item.pk, 'status': 'cancelled', 'message': 'ยกเลิกการจองเรียบร้อยแล้ว'})
+
+    item, _ = CancellationRequest.objects.update_or_create(
+        booking=booking,
+        defaults={'reason': reason, 'requested_by': actor, 'status': 'pending'}
+    )
     record(request, 'cancel_requested', booking=booking, reason=reason)
-    return Response({'id': item.pk, 'status': item.status, 'message': 'ส่งคำขอแล้ว รอ Admin อนุมัติ'})
+    return Response({'id': item.pk, 'status': item.status, 'message': 'ส่งคำขอยกเลิกแล้ว รอ Admin ตรวจสอบยอดคืนเงิน'})
 
 
 @api_view(['POST'])
