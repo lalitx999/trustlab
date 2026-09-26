@@ -63,12 +63,18 @@ def resolve_certificate(pk):
         from django.http import Http404
         raise Http404("Certificate not found")
     
-    cert = Certificate.objects.filter(cert_code=pk).first()
+    clean_pk = str(pk).strip()
+    cert = Certificate.objects.filter(cert_code__iexact=clean_pk).first()
     if cert:
         return cert
-        
+
+    if not clean_pk.upper().startswith('TL-'):
+        cert = Certificate.objects.filter(cert_code__iexact=f"TL-{clean_pk}").first()
+        if cert:
+            return cert
+
     try:
-        return Certificate.objects.get(id=int(pk))
+        return Certificate.objects.get(id=int(clean_pk))
     except (ValueError, TypeError, Certificate.DoesNotExist):
         from django.http import Http404
         raise Http404("Certificate not found")
