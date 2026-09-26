@@ -170,14 +170,46 @@ SIMPLE_JWT = {
 }
 
 # Hostinger Email / SMTP Configuration settings
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', os.getenv('SMTP_HOST', 'smtp.hostinger.com'))
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', os.getenv('SMTP_PORT', '465')))
-EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'True').lower() in ('true', '1')
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1')
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', os.getenv('SMTP_USER', ''))
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', os.getenv('SMTP_PASSWORD', ''))
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', os.getenv('SMTP_FROM_EMAIL', 'TRUST LAB THAILAND <noreply@trustlabthailand.com>'))
+smtp_port_raw = os.getenv('EMAIL_PORT', os.getenv('SMTP_PORT', '465'))
+try:
+    EMAIL_PORT = int(smtp_port_raw)
+except ValueError:
+    EMAIL_PORT = 465
+
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', os.getenv('SMTP_USER', '')).strip()
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', os.getenv('SMTP_PASSWORD', '')).strip()
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', os.getenv('SMTP_FROM_EMAIL', 'TRUST LAB THAILAND <noreply@trustlabthailand.com>')).strip()
+
+# Determine SSL vs TLS cleanly without conflicts
+if 'EMAIL_USE_SSL' in os.environ:
+    EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False').lower() in ('true', '1')
+else:
+    EMAIL_USE_SSL = (EMAIL_PORT == 465)
+
+if 'EMAIL_USE_TLS' in os.environ:
+    EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1')
+elif 'SMTP_USE_TLS' in os.environ:
+    EMAIL_USE_TLS = os.getenv('SMTP_USE_TLS', 'False').lower() in ('true', '1')
+else:
+    EMAIL_USE_TLS = (EMAIL_PORT == 587)
+
+if EMAIL_USE_SSL and EMAIL_USE_TLS:
+    if EMAIL_PORT == 587:
+        EMAIL_USE_SSL = False
+    else:
+        EMAIL_USE_TLS = False
+
+is_dummy_user = not EMAIL_HOST_USER or 'your_email' in EMAIL_HOST_USER or 'example.com' in EMAIL_HOST_USER
+is_dummy_pass = not EMAIL_HOST_PASSWORD or 'your_app_password' in EMAIL_HOST_PASSWORD
+
+configured_backend = os.getenv('EMAIL_BACKEND', '')
+if configured_backend:
+    EMAIL_BACKEND = configured_backend
+elif DEBUG and (is_dummy_user or is_dummy_pass):
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 
 # Upload Payload Size Limit Configuration (Allow multi-photo uploads)
 DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50 MB

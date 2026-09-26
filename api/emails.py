@@ -207,7 +207,7 @@ def send_certificate_email(cert, recipient_email=None):
     if not email_to:
         return False
 
-    cname = (cert.job and cert.job.customer and cert.job.customer.email) or 'ลูกค้าผู้มีอุปการคุณ'
+    cname = (cert.job and cert.job.customer and cert.job.customer.full_name) or 'ลูกค้าผู้มีอุปการคุณ'
     cert_code = cert.cert_code
     brand = cert.job.brand if cert.job else '-'
     model = cert.job.model if cert.job else '-'
