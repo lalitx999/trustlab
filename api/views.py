@@ -450,13 +450,23 @@ def certificate_expire(request, pk):
 @permission_classes([AllowAny])
 def certificate_pdf_view(request, pk):
     """Serves ReportLab generated PDF certificate dynamically"""
-    cert = resolve_certificate(pk)
-    if cert.job.service_package == 'photo_review':
-        return Response({'error': 'ไม่พบใบรับรอง'}, status=404)
-    pdf_buffer = generate_certificate_pdf(cert)
-    response = HttpResponse(pdf_buffer.read(), content_type='application/pdf')
-    response['Content-Disposition'] = f'inline; filename="certificate_{pk}.pdf"'
-    return response
+    try:
+        cert = resolve_certificate(pk)
+    except Exception:
+        return Response({'error': 'ไม่พบหมายเลขใบรับรองในระบบ'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not cert or (cert.job and cert.job.service_package == 'photo_review'):
+        return Response({'error': 'ไม่พบใบรับรอง'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        pdf_buffer = generate_certificate_pdf(cert)
+        pdf_bytes = pdf_buffer.getvalue()
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="certificate_{pk}.pdf"'
+        return response
+    except Exception as e:
+        logger.exception('Failed to generate PDF certificate (pk=%s)', pk)
+        return Response({'error': 'ไม่สามารถสร้างไฟล์ PDF ได้ในขณะนี้'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
