@@ -1,5 +1,16 @@
 # api/renderers.py
-from rest_framework.renderers import JSONRenderer
+from rest_framework.renderers import JSONRenderer, BaseRenderer
+
+class PassthroughRenderer(BaseRenderer):
+    """
+    Passthrough renderer that satisfies any Accept header (including application/pdf, binary, */*)
+    and returns raw response data untouched.
+    """
+    media_type = '*/*'
+    format = 'binary'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 class EnvelopedJSONRenderer(JSONRenderer):
     """

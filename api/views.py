@@ -6,9 +6,10 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
 from django.db.models import Q, Min
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsStaff, IsAdministrator, IsFrontDesk, IsInspector
+from .renderers import PassthroughRenderer
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
@@ -454,6 +455,7 @@ def certificate_expire(request, pk):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@renderer_classes([PassthroughRenderer])
 def certificate_pdf_view(request, pk):
     """Serves ReportLab generated PDF certificate dynamically"""
     try:
