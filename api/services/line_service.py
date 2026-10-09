@@ -6,10 +6,12 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
-LINE_CHANNEL_ID = getattr(settings, 'LINE_CHANNEL_ID', os.getenv('LINE_CHANNEL_ID', ''))
-LINE_CHANNEL_SECRET = getattr(settings, 'LINE_CHANNEL_SECRET', os.getenv('LINE_CHANNEL_SECRET', ''))
-LINE_ACCESS_TOKEN = getattr(settings, 'LINE_ACCESS_TOKEN', os.getenv('LINE_ACCESS_TOKEN', ''))
-LINE_CALLBACK_URL = getattr(settings, 'LINE_CALLBACK_URL', os.getenv('LINE_CALLBACK_URL', 'https://www.trustlabthailand.com/api/auth/line/callback'))
+def get_line_credentials():
+    channel_id = getattr(settings, 'LINE_CHANNEL_ID', '') or os.getenv('LINE_CHANNEL_ID', '') or os.getenv('LINE_CLIENT_ID', '')
+    channel_secret = getattr(settings, 'LINE_CHANNEL_SECRET', '') or os.getenv('LINE_CHANNEL_SECRET', '') or os.getenv('LINE_CLIENT_SECRET', '')
+    access_token = getattr(settings, 'LINE_ACCESS_TOKEN', '') or os.getenv('LINE_ACCESS_TOKEN', '') or os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
+    callback_url = getattr(settings, 'LINE_CALLBACK_URL', '') or os.getenv('LINE_CALLBACK_URL', 'https://www.trustlabthailand.com/api/auth/line/callback')
+    return channel_id, channel_secret, access_token, callback_url
 
 
 def get_line_user_profile(code: str, redirect_uri: str = None) -> dict:
@@ -17,10 +19,11 @@ def get_line_user_profile(code: str, redirect_uri: str = None) -> dict:
     Exchanges LINE OAuth code for access token and fetches user profile.
     Returns dict containing line_user_id, display_name, picture_url, status_message
     """
+    channel_id, channel_secret, _, default_redirect_uri = get_line_credentials()
     if not redirect_uri:
-        redirect_uri = LINE_CALLBACK_URL
+        redirect_uri = default_redirect_uri
 
-    if not LINE_CHANNEL_ID or not LINE_CHANNEL_SECRET:
+    if not channel_id or not channel_secret:
         logger.warning("LINE_CHANNEL_ID or LINE_CHANNEL_SECRET not configured.")
         # Return mock payload in development if keys are not set
         return {
@@ -37,8 +40,8 @@ def get_line_user_profile(code: str, redirect_uri: str = None) -> dict:
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-        "client_id": LINE_CHANNEL_ID,
-        "client_secret": LINE_CHANNEL_SECRET,
+        "client_id": channel_id,
+        "client_secret": channel_secret,
     }
 
     try:
@@ -76,7 +79,7 @@ def send_line_push_message(to_user_or_group_id: str, messages: list) -> dict:
     Sends push notification via LINE Messaging API (Long-lived Channel Access Token).
     `messages` should be a list of dicts (Text/Flex messages).
     """
-    access_token = LINE_ACCESS_TOKEN or os.getenv('LINE_ACCESS_TOKEN', '')
+    _, _, access_token, _ = get_line_credentials()
     if not access_token:
         logger.warning("LINE_ACCESS_TOKEN is missing. Notification skipped.")
         return {"status": "mock", "message": "LINE_ACCESS_TOKEN is not configured."}
