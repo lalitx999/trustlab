@@ -295,6 +295,35 @@ class Job(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        if self.price:
+            try:
+                price_val = float(self.price)
+                vat_val = round(price_val - (price_val / 1.07), 2)
+                subtotal_val = round(price_val - vat_val, 2)
+                
+                # Sync price_snapshot inside Job
+                snap = self.price_snapshot or {}
+                snap['total'] = f"{price_val:.2f}"
+                snap['service_amount'] = f"{price_val:.2f}"
+                snap['subtotal'] = f"{subtotal_val:.2f}"
+                snap['vat_amount'] = f"{vat_val:.2f}"
+                self.price_snapshot = snap
+                self.vat_amount = decimal.Decimal(f"{vat_val:.2f}")
+
+                # Sync price_snapshot inside associated Booking
+                if self.booking:
+                    bsnap = self.booking.price_snapshot or {}
+                    bsnap['total'] = f"{price_val:.2f}"
+                    bsnap['service_amount'] = f"{price_val:.2f}"
+                    bsnap['subtotal'] = f"{subtotal_val:.2f}"
+                    bsnap['vat_amount'] = f"{vat_val:.2f}"
+                    self.booking.price_snapshot = bsnap
+                    self.booking.save(update_fields=['price_snapshot'])
+            except Exception:
+                pass
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"Job #{self.id} ({self.queue_no}) - {self.brand} {self.model}"
 
