@@ -127,6 +127,7 @@ urlpatterns = [
     path('payments/promptpay/webhook', flow.disabled_payment, name='payments_webhook_promptpay'),
     path('payments/charge', flow.disabled_payment, name='payments_charge'),
     path('auth/line-login', auth_line_login, name='auth_line_login'),
+    path('auth/line/callback', auth_line_login, name='auth_line_callback'),
     
     # 8. Customer Portal Dashboard
     path('auth/customer/register', auth_customer_register, name='auth_customer_register'),
