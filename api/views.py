@@ -522,9 +522,17 @@ def public_verify(request, pk):
 @api_view(['GET'])
 @permission_classes([IsStaff])
 def bookings_today(request):
-    """Lists bookings for today (useful for staff checking camera scans)"""
-    today = datetime.date.today()
-    bookings = Booking.objects.filter(booking_date=today).order_by('booking_time')
+    """Lists bookings for today or specified target date (useful for staff camera scans)"""
+    date_param = request.query_params.get('date')
+    if date_param:
+        try:
+            target_date = datetime.date.fromisoformat(str(date_param).strip())
+        except (ValueError, TypeError):
+            target_date = datetime.date.today()
+    else:
+        target_date = datetime.date.today()
+
+    bookings = Booking.objects.filter(booking_date=target_date).order_by('booking_time')
     return Response(BookingSerializer(bookings, many=True).data, status=status.HTTP_200_OK)
 
 
