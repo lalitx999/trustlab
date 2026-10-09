@@ -43,6 +43,7 @@ from .views import (
     promo_code_validate,
     PromoCodeListCreateView,
     PromoCodeDetailView,
+    trigger_wechat_alert,
 )
 
 from . import workflows as flow
@@ -141,4 +142,7 @@ urlpatterns = [
     path('promo-codes/validate', promo_code_validate, name='promo_code_validate'),
     path('promo-codes', PromoCodeListCreateView.as_view(), name='promo_codes_list_create'),
     path('promo-codes/<int:pk>', PromoCodeDetailView.as_view(), name='promo_code_detail_update_delete'),
+
+    # 11. WeChat / LINE Integrations
+    path('notifications/wechat/trigger', trigger_wechat_alert, name='trigger_wechat_alert'),
 ]

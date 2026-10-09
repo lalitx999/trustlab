@@ -1806,3 +1806,50 @@ class PromoCodeDetailView(APIView):
         promo.delete()
         return Response({"status": "deleted", "message": "ลบโค้ดส่วนลดเรียบร้อยแล้ว"}, status=status.HTTP_200_OK)
 
+
+@api_view(['POST', 'GET'])
+@permission_classes([AllowAny])
+def auth_line_login(request):
+    """Handles LINE OAuth Login callback & token exchange for staff/customers"""
+    if request.method == 'GET':
+        code = request.query_params.get('code')
+        redirect_uri = request.query_params.get('redirect_uri')
+    else:
+        code = request.data.get('code')
+        redirect_uri = request.data.get('redirect_uri')
+
+    if not code:
+        return Response({"status": "error", "message": "Missing authorization code"}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .services.line_service import get_line_user_profile
+    result = get_line_user_profile(code, redirect_uri=redirect_uri)
+    if result.get("status") == "error":
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+
+    # Return profile data + JWT auth tokens if staff user exists
+    line_user_id = result.get("line_user_id")
+    staff = StaffUser.objects.filter(username=line_user_id).first()
+    if staff:
+        refresh = RefreshToken.for_user(staff)
+        result["tokens"] = {
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+        }
+        result["user"] = StaffUserSerializer(staff).data
+
+    return Response(result, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsStaff])
+def trigger_wechat_alert(request):
+    """Triggers an urgent queue / walk-in alert to WeChat Work group bot"""
+    title = request.data.get('title', 'แจ้งเตือนคิวงานตรวจด่วน')
+    content = request.data.get('content', 'มีคิวงานตรวจด่วนเพิ่มเข้ามาในระบบ')
+    job_id = request.data.get('job_id')
+
+    from .services.wechat_service import send_wechat_work_alert
+    res = send_wechat_work_alert(title, content, job_id=job_id)
+    return Response(res, status=status.HTTP_200_OK)
+
+
