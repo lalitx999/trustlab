@@ -2,7 +2,10 @@ import os
 import datetime
 import uuid
 import decimal
+import logging
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 from django.shortcuts import get_object_or_404
 from django.http import HttpResponse, FileResponse
 from django.db.models import Q, Min
