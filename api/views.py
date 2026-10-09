@@ -1847,6 +1847,17 @@ def auth_line_login(request):
 @permission_classes([AllowAny])
 def line_messaging_webhook(request):
     """Handles LINE Messaging API Webhook verification and bot events"""
+    if request.method == 'POST' and isinstance(request.data, dict):
+        events = request.data.get('events', [])
+        for ev in events:
+            source = ev.get('source', {})
+            group_id = source.get('groupId')
+            user_id = source.get('userId')
+            if group_id:
+                logger.info(f"📢 FOUND LINE GROUP ID: {group_id}")
+                print(f"\n📢 FOUND LINE GROUP ID: {group_id}\n", flush=True)
+            elif user_id:
+                logger.info(f"👤 FOUND LINE USER ID: {user_id}")
     return Response({"status": "ok"}, status=status.HTTP_200_OK)
 
 
