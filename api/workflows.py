@@ -242,7 +242,9 @@ def create_booking(request):
         if snapshot['service_package'] == 'photo_review' and not photos:
             raise ValidationError('Photo Review ต้องแนบภาพสินค้า')
         for photo in photos:
-            image_data(photo)
+            clean_img = Base64ImageField().run_validation(image_data(photo))
+            BookingPhoto.objects.create(booking=booking, photo=clean_img, photo_type='customer')
+
         queue_staff_notification(f'booking:{booking.pk}:created', 'booking_created', {'booking_id': booking.pk}, channels=('line',))
         
         # Schedule instant LINE Group Flex Message notification with preview photos
