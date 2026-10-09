@@ -522,7 +522,7 @@ def public_verify(request, pk):
 @api_view(['GET'])
 @permission_classes([IsStaff])
 def bookings_today(request):
-    """Lists bookings for today or specified target date (useful for staff camera scans)"""
+    """Lists bookings for specified target date (or today), matching booking_date or created_at date, including all statuses (completed/pending/etc.)"""
     date_param = request.query_params.get('date')
     if date_param:
         try:
@@ -532,7 +532,9 @@ def bookings_today(request):
     else:
         target_date = datetime.date.today()
 
-    bookings = Booking.objects.filter(booking_date=target_date).order_by('booking_time')
+    bookings = Booking.objects.filter(
+        Q(booking_date=target_date) | Q(created_at__date=target_date)
+    ).distinct().order_by('booking_time', '-id')
     return Response(BookingSerializer(bookings, many=True).data, status=status.HTTP_200_OK)
 
 
