@@ -170,7 +170,8 @@ class BookingSerializer(serializers.ModelSerializer):
             'customer_discount_percent', 'member_badge',
             'branch', 'branch_name', 'booking_date', 'booking_time', 'time_slot',
             'service_type', 'service_name', 'status', 'photos', 'created_at',
-            'service_package', 'price_snapshot', 'payment_status', 'payment_method', 'inspection_result',
+            'service_package', 'price_snapshot', 'promo_code', 'promo_code_str', 'payment_status', 'payment_method', 'inspection_result',
+
             'category', 'brand_name', 'brand', 'model', 'note', 'photo_count',
             # Return shipping
             'delivery_method', 'shipping_fee',
