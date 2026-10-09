@@ -1815,10 +1815,13 @@ def auth_line_login(request):
         code = request.query_params.get('code')
         redirect_uri = request.query_params.get('redirect_uri')
     else:
-        code = request.data.get('code')
-        redirect_uri = request.data.get('redirect_uri')
+        code = request.data.get('code') if isinstance(request.data, dict) else None
+        redirect_uri = request.data.get('redirect_uri') if isinstance(request.data, dict) else None
 
     if not code:
+        # Handle LINE Messaging API Webhook verification check (events/destination)
+        if isinstance(request.data, dict) and ('events' in request.data or 'destination' in request.data):
+            return Response({"status": "ok"}, status=status.HTTP_200_OK)
         return Response({"status": "error", "message": "Missing authorization code"}, status=status.HTTP_400_BAD_REQUEST)
 
     from .services.line_service import get_line_user_profile
@@ -1838,6 +1841,14 @@ def auth_line_login(request):
         result["user"] = StaffUserSerializer(staff).data
 
     return Response(result, status=status.HTTP_200_OK)
+
+
+@api_view(['POST', 'GET'])
+@permission_classes([AllowAny])
+def line_messaging_webhook(request):
+    """Handles LINE Messaging API Webhook verification and bot events"""
+    return Response({"status": "ok"}, status=status.HTTP_200_OK)
+
 
 
 @api_view(['POST'])

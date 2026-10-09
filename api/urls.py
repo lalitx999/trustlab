@@ -44,6 +44,7 @@ from .views import (
     PromoCodeListCreateView,
     PromoCodeDetailView,
     trigger_wechat_alert,
+    line_messaging_webhook,
 )
 
 from . import workflows as flow
@@ -146,4 +147,5 @@ urlpatterns = [
 
     # 11. WeChat / LINE Integrations
     path('notifications/wechat/trigger', trigger_wechat_alert, name='trigger_wechat_alert'),
+    path('notifications/line/webhook', line_messaging_webhook, name='line_messaging_webhook'),
 ]
