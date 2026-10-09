@@ -237,8 +237,21 @@ def create_booking(request):
             raise ValidationError('Photo Review ต้องแนบภาพสินค้า')
         for photo in photos:
             image_data(photo)
-            BookingPhoto.objects.create(booking=booking, photo=Base64ImageField().run_validation(photo), photo_type='customer')
         queue_staff_notification(f'booking:{booking.pk}:created', 'booking_created', {'booking_id': booking.pk}, channels=('line',))
+        
+        # Schedule instant LINE Group Flex Message notification with preview photos
+        b_id = booking.pk
+        def notify_line():
+            try:
+                from .services.line_service import send_line_booking_notification
+                fresh_b = Booking.objects.filter(pk=b_id).first()
+                if fresh_b:
+                    send_line_booking_notification(fresh_b)
+            except Exception as e:
+                logger.exception("Failed sending LINE booking notification (booking_id=%s)", b_id)
+        
+        transaction.on_commit(notify_line)
+
         return Response({'booking_id': booking.pk, 'status': booking.status, 'payment_status': booking.payment_status, 'quote': snapshot,
                          'receipt_token': signing.dumps({'booking_id': booking.pk, 'request_key': str(booking.request_key)}, salt='receipt')}, status=201)
 

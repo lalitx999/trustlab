@@ -124,9 +124,172 @@ def send_line_certificate_alert(booking_id: str, cert_code: str, pdf_url: str, l
         }
     ]
 
-    target_id = line_user_id or os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    target_id = line_user_id or os.getenv('LINE_NOTIFY_TARGET_ID', '') or os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
     if not target_id:
-        logger.info("No target LINE User ID provided for notification.")
-        return {"status": "mock", "message": "No target LINE User ID provided."}
+        logger.info("No target LINE User/Group ID provided for notification.")
+        return {"status": "mock", "message": "No target LINE User/Group ID provided."}
 
     return send_line_push_message(target_id, messages)
+
+
+def build_booking_flex_message(booking) -> dict:
+    """Builds a rich LINE Flex Message card for a new online booking"""
+    customer_name = booking.customer.full_name if booking.customer else "ลูกค้าทั่วไป"
+    customer_phone = booking.customer.phone_number if booking.customer else "-"
+    branch_name = booking.branch.name if booking.branch else "สาขาหลัก"
+    booking_id = f"BK-{booking.pk:06d}" if isinstance(booking.pk, int) else str(booking.pk)
+    date_str = str(booking.booking_date)
+    time_str = str(booking.booking_time)[:5] if booking.booking_time else "-"
+
+    item_desc = f"{booking.brand_name} {booking.model}".strip() or booking.category or "สินค้าตรวจ"
+    pkg = booking.service_package or "Physical Inspection"
+    price = f"{float(booking.price_snapshot.get('total', 0)):,.2f}" if (isinstance(booking.price_snapshot, dict) and 'total' in booking.price_snapshot) else "0.00"
+
+    pm_method = {
+        'shop': 'ชำระหน้าร้าน',
+        'promptpay': 'PromptPay',
+        'wallet': 'เครดิตสมาชิก',
+        'transfer': 'โอนผ่านธนาคาร',
+        'cash': 'เงินสด',
+        'credit_card': 'บัตรเครดิต'
+    }.get(booking.payment_method, booking.payment_method or '-')
+
+    pm_status = {
+        'paid': 'ชำระแล้ว',
+        'pending_review': 'รอตรวจสลิป',
+        'unpaid': 'ยังไม่ชำระ'
+    }.get(booking.payment_status, booking.payment_status or '-')
+
+    delivery = "จัดส่งพัสดุ" if booking.delivery_method == 'shipping' else "มารับด้วยตัวเอง"
+
+    flex_json = {
+        "type": "flex",
+        "altText": f"📋 มีการจองคิวใหม่! {booking_id} ({customer_name})",
+        "contents": {
+            "type": "bubble",
+            "size": "mega",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "backgroundColor": "#1E293B",
+                "paddingAll": "15px",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "📋 TRUST LAB • NEW BOOKING",
+                        "weight": "bold",
+                        "color": "#F59E0B",
+                        "size": "xs"
+                    },
+                    {
+                        "type": "text",
+                        "text": f"คิวจองใหม่ #{booking_id}",
+                        "weight": "bold",
+                        "color": "#FFFFFF",
+                        "size": "lg",
+                        "margin": "xs"
+                    }
+                ]
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "spacing": "md",
+                "contents": [
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "ลูกค้า", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": f"{customer_name} ({customer_phone})", "size": "xs", "color": "#1E293B", "weight": "bold", "flex": 5, "wrap": True}
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "นัดหมาย", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": f"{date_str} เวลา {time_str} น.", "size": "xs", "color": "#2563EB", "weight": "bold", "flex": 5}
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "สาขา", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": branch_name, "size": "xs", "color": "#1E293B", "flex": 5}
+                        ]
+                    },
+                    {"type": "separator", "margin": "md"},
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "สินค้า", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": f"[{booking.category}] {item_desc}", "size": "xs", "color": "#1E293B", "weight": "bold", "flex": 5, "wrap": True}
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "แพ็กเกจ", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": pkg, "size": "xs", "color": "#1E293B", "flex": 5}
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "ยอดรวม", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": f"฿{price} ({pm_status} / {pm_method})", "size": "xs", "color": "#059669", "weight": "bold", "flex": 5, "wrap": True}
+                        ]
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {"type": "text", "text": "การจัดส่ง", "size": "xs", "color": "#64748B", "flex": 2},
+                            {"type": "text", "text": delivery, "size": "xs", "color": "#1E293B", "flex": 5}
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+    return flex_json
+
+
+def send_line_booking_notification(booking, target_id: str = None) -> dict:
+    """
+    Sends Flex Message + preview photos to a LINE Group (or User) whenever a new booking is created.
+    `target_id` can be a Group ID (C...) or User ID (U...).
+    """
+    target = target_id or os.getenv('LINE_NOTIFY_TARGET_ID', '') or os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    if not target:
+        logger.info("No target LINE Group/User ID provided for booking notification.")
+        return {"status": "mock", "message": "LINE_NOTIFY_TARGET_ID is not configured."}
+
+    flex_msg = build_booking_flex_message(booking)
+    messages = [flex_msg]
+
+    # Attach customer preview photos (up to 3 photos)
+    try:
+        photos = booking.photos.filter(photo_type='customer')[:3]
+        for p in photos:
+            if p.photo:
+                img_url = p.photo.url
+                if not img_url.startswith('http'):
+                    base_domain = os.getenv('BACKEND_BASE_URL', 'https://app2.tanchonhomserverxxx.online').rstrip('/')
+                    img_url = f"{base_domain}{img_url}"
+
+                messages.append({
+                    "type": "image",
+                    "originalContentUrl": img_url,
+                    "previewImageUrl": img_url
+                })
+    except Exception as e:
+        logger.exception("Error formatting photo URL for LINE booking notification")
+
+    return send_line_push_message(target, messages)
+
