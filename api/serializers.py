@@ -21,7 +21,13 @@ class Base64ImageField(serializers.ImageField):
                 data = ContentFile(base64.b64decode(imgstr), name=file_name)
             except Exception as e:
                 raise serializers.ValidationError(f"Invalid base64 image data: {str(e)}")
-        return super().to_internal_value(data)
+        try:
+            return super().to_internal_value(data)
+        except (SyntaxError, Exception) as e:
+            if isinstance(e, serializers.ValidationError):
+                raise e
+            raise serializers.ValidationError("ไฟล์รูปภาพไม่ถูกต้องหรือเสียหาย (Invalid or corrupted image)")
+
 
 
 class StaffUserSerializer(serializers.ModelSerializer):

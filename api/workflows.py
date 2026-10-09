@@ -59,8 +59,14 @@ def pk_value(value):
 def image_data(value):
     if not isinstance(value, str) or len(value) > 12 * 1024 * 1024:
         raise ValidationError('ภาพต้องมีขนาดไม่เกิน 8 MB')
-    Base64ImageField().run_validation(value)
+    try:
+        Base64ImageField().run_validation(value)
+    except ValidationError:
+        raise
+    except Exception as e:
+        raise ValidationError('ไฟล์รูปภาพไม่ถูกต้องหรือเสียหาย')
     return value
+
 
 
 def qr_image(amount):

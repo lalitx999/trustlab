@@ -95,14 +95,19 @@ def send_line_push_message(to_user_or_group_id: str, messages: list) -> dict:
     }
 
     try:
+        print(f"📡 Sending LINE Push Message to {to_user_or_group_id}...", flush=True)
         res = requests.post(push_url, json=payload, headers=headers, timeout=10)
         if res.status_code == 200:
+            print(f"✅ LINE Push Sent Successfully to {to_user_or_group_id}", flush=True)
             return {"status": "success", "response": res.json() if res.text else {}}
         else:
-            logger.error(f"LINE Push Error: {res.status_code} - {res.text}")
+            msg = f"❌ LINE Push Failed ({res.status_code}): {res.text}"
+            logger.error(msg)
+            print(msg, flush=True)
             return {"status": "error", "code": res.status_code, "message": res.text}
     except Exception as e:
         logger.exception("Exception in send_line_push_message")
+        print(f"❌ Exception in send_line_push_message: {e}", flush=True)
         return {"status": "error", "message": str(e)}
 
 
@@ -124,7 +129,14 @@ def send_line_certificate_alert(booking_id: str, cert_code: str, pdf_url: str, l
         }
     ]
 
-    target_id = line_user_id or os.getenv('LINE_NOTIFY_TARGET_ID', '') or os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    target_id = (
+        line_user_id or
+        getattr(settings, 'LINE_NOTIFY_TARGET_ID', '') or
+        os.getenv('LINE_NOTIFY_TARGET_ID', '') or
+        os.getenv('LINE_GROUP_ID', '') or
+        os.getenv('LINE_NOTIFY_GROUP_ID', '') or
+        os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    )
     if not target_id:
         logger.info("No target LINE User/Group ID provided for notification.")
         return {"status": "mock", "message": "No target LINE User/Group ID provided."}
@@ -265,9 +277,18 @@ def send_line_booking_notification(booking, target_id: str = None) -> dict:
     Sends Flex Message + preview photos to a LINE Group (or User) whenever a new booking is created.
     `target_id` can be a Group ID (C...) or User ID (U...).
     """
-    target = target_id or os.getenv('LINE_NOTIFY_TARGET_ID', '') or os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    target = (
+        target_id or
+        getattr(settings, 'LINE_NOTIFY_TARGET_ID', '') or
+        os.getenv('LINE_NOTIFY_TARGET_ID', '') or
+        os.getenv('LINE_GROUP_ID', '') or
+        os.getenv('LINE_NOTIFY_GROUP_ID', '') or
+        os.getenv('LINE_DEFAULT_NOTIFY_USER_ID', '')
+    )
     if not target:
-        logger.info("No target LINE Group/User ID provided for booking notification.")
+        msg = "⚠️ LINE Notification Skipped: No target LINE Group/User ID configured."
+        logger.info(msg)
+        print(msg, flush=True)
         return {"status": "mock", "message": "LINE_NOTIFY_TARGET_ID is not configured."}
 
     flex_msg = build_booking_flex_message(booking)
@@ -282,6 +303,8 @@ def send_line_booking_notification(booking, target_id: str = None) -> dict:
                 if not img_url.startswith('http'):
                     base_domain = os.getenv('BACKEND_BASE_URL', 'https://app2.tanchonhomserverxxx.online').rstrip('/')
                     img_url = f"{base_domain}{img_url}"
+                if img_url.startswith('http://'):
+                    img_url = img_url.replace('http://', 'https://', 1)
 
                 messages.append({
                     "type": "image",
@@ -290,6 +313,7 @@ def send_line_booking_notification(booking, target_id: str = None) -> dict:
                 })
     except Exception as e:
         logger.exception("Error formatting photo URL for LINE booking notification")
+        print(f"⚠️ Error formatting photo URL for LINE notification: {e}", flush=True)
 
+    print(f"🚀 Triggering LINE Booking Notification for BK-{booking.pk} to Target: {target}", flush=True)
     return send_line_push_message(target, messages)
-
