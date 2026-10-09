@@ -40,6 +40,9 @@ from .views import (
     auth_customer_register,
     customer_dashboard,
     customer_profile_update,
+    promo_code_validate,
+    PromoCodeListCreateView,
+    PromoCodeDetailView,
 )
 
 from . import workflows as flow
@@ -133,4 +136,9 @@ urlpatterns = [
     path('customer/topup/initiate', flow.topup_initiate, name='customer_topup_initiate'),
     path('customer/topup/submit-slip', flow.topup_slip, name='customer_topup_submit_slip'),
     path('customer/topup/charge-card', flow.disabled_payment, name='customer_topup_charge_card'),
+
+    # 10. Promo Codes / Voucher Discount System
+    path('promo-codes/validate', promo_code_validate, name='promo_code_validate'),
+    path('promo-codes', PromoCodeListCreateView.as_view(), name='promo_codes_list_create'),
+    path('promo-codes/<int:pk>', PromoCodeDetailView.as_view(), name='promo_code_detail_update_delete'),
 ]

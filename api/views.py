@@ -18,14 +18,14 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .models import (
     StaffUser, Branch, Brand, MembershipLevel, BrandPricing,
     ServiceType, Customer, Booking, BookingPhoto,
-    Job, Certificate, CertificateSendLog, Contact, Partner
+    Job, Certificate, CertificateSendLog, Contact, Partner, PromoCode
 )
 from .serializers import (
     StaffUserSerializer, BranchSerializer, BrandSerializer, MembershipLevelSerializer,
     BrandPricingSerializer, ServiceTypeSerializer, CustomerSerializer,
     BookingSerializer, BookingPhotoSerializer, JobSerializer,
     CertificateSerializer, CertificateSendLogSerializer,
-    ContactSerializer, PartnerSerializer
+    ContactSerializer, PartnerSerializer, PromoCodeSerializer
 )
 from .promptpay import generate_promptpay_payload, generate_qr_code_image
 from .pdf_generator import generate_certificate_pdf
@@ -1692,3 +1692,107 @@ def customer_profile_update(request):
             "email": user.email,
         }
     }, status=200)
+
+
+# ============================================================
+# 8. Promo Codes / Voucher Discount Management
+# ============================================================
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def promo_code_validate(request):
+    """
+    Validates a promo code for customer booking and returns calculation breakdown.
+    Expects JSON body: { "code": "PROMO1000", ...quote fields... }
+    """
+    code_str = str(request.data.get('code') or request.data.get('promo_code') or '').strip().upper()
+    if not code_str:
+        return Response({'valid': False, 'message': 'กรุณาระบุโค้ดส่วนลด'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from django.utils import timezone
+    promo = PromoCode.objects.filter(code__iexact=code_str, is_active=True).first()
+    if not promo:
+        return Response({'valid': False, 'message': 'ไม่พบโค้ดส่วนลดนี้ หรือโค้ดถูกยกเลิกแล้ว'}, status=status.HTTP_404_NOT_FOUND)
+
+    now = timezone.now()
+    if promo.valid_from and now < promo.valid_from:
+        return Response({'valid': False, 'message': 'โค้ดส่วนลดนี้ยังไม่ถึงช่วงเวลาใช้งาน'}, status=status.HTTP_400_BAD_REQUEST)
+    if promo.valid_to and now > promo.valid_to:
+        return Response({'valid': False, 'message': 'โค้ดส่วนลดนี้หมดอายุแล้ว'}, status=status.HTTP_400_BAD_REQUEST)
+    if promo.usage_limit is not None and promo.used_count >= promo.usage_limit:
+        return Response({'valid': False, 'message': 'โค้ดส่วนลดนี้ถูกใช้งานครบตามจำนวนสิทธิ์แล้ว'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # If full quote parameters were passed, calculate exact quote snapshot with promo
+    if request.data.get('service_package') or request.data.get('serviceId'):
+        from .commerce import quote
+        try:
+            quote_data = request.data.copy()
+            quote_data['promo_code'] = promo.code
+            snapshot = quote(quote_data)
+            return Response({
+                'valid': True,
+                'promo': PromoCodeSerializer(promo).data,
+                'quote': snapshot,
+                'message': 'ใช้โค้ดส่วนลดสำเร็จ'
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'valid': False, 'message': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        'valid': True,
+        'promo': PromoCodeSerializer(promo).data,
+        'message': 'โค้ดส่วนลดสามารถใช้งานได้'
+    }, status=status.HTTP_200_OK)
+
+
+class PromoCodeListCreateView(APIView):
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [IsStaff()]
+        return [IsAdministrator()]
+
+    def get(self, request):
+        promos = PromoCode.objects.all().order_by('-created_at')
+        return Response(PromoCodeSerializer(promos, many=True).data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        code_raw = str(request.data.get('code', '')).strip().upper()
+        data = request.data.copy()
+        data['code'] = code_raw
+        serializer = PromoCodeSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PromoCodeDetailView(APIView):
+    permission_classes = [IsAdministrator]
+
+    def get_object(self, pk):
+        return get_object_or_404(PromoCode, pk=pk)
+
+    def get(self, request, pk):
+        promo = self.get_object(pk)
+        return Response(PromoCodeSerializer(promo).data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        promo = self.get_object(pk)
+        data = request.data.copy()
+        if 'code' in data:
+            data['code'] = str(data['code']).strip().upper()
+        serializer = PromoCodeSerializer(promo, data=data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        promo = self.get_object(pk)
+        if promo.used_count > 0:
+            promo.is_active = False
+            promo.save(update_fields=['is_active'])
+            return Response({"status": "deactivated", "message": "ยกเลิกการใช้งานโค้ดส่วนลดแล้ว"}, status=status.HTTP_200_OK)
+        promo.delete()
+        return Response({"status": "deleted", "message": "ลบโค้ดส่วนลดเรียบร้อยแล้ว"}, status=status.HTTP_200_OK)
+

@@ -183,6 +183,30 @@ def quote(data, customer=None, allow_missing_price=False):
                 discount_percent = (Decimal('1') - factor) * 100
     if before_discount is None:
         before_discount = amount
+
+    # Apply Promo Code discount if provided
+    promo_obj = None
+    promo_code_input = str(data.get('promo_code') or data.get('promo_code_str') or data.get('promo') or '').strip().upper()
+    promo_discount_amount = Decimal('0.00')
+    if promo_code_input:
+        from .models import PromoCode
+        from django.utils import timezone
+        promo_obj = PromoCode.objects.filter(code__iexact=promo_code_input, is_active=True).first()
+        if not promo_obj:
+            raise ValidationError('โค้ดส่วนลดไม่ถูกต้องหรือถูกยกเลิกแล้ว')
+        now = timezone.now()
+        if promo_obj.valid_from and now < promo_obj.valid_from:
+            raise ValidationError('โค้ดส่วนลดนี้ยังไม่ถึงช่วงเวลาใช้งาน')
+        if promo_obj.valid_to and now > promo_obj.valid_to:
+            raise ValidationError('โค้ดส่วนลดนี้หมดอายุแล้ว')
+        if promo_obj.usage_limit is not None and promo_obj.used_count >= promo_obj.usage_limit:
+            raise ValidationError('โค้ดส่วนลดนี้ถูกใช้งานครบตามจำนวนสิทธิ์แล้ว')
+        if promo_obj.min_spend and amount < promo_obj.min_spend:
+            raise ValidationError(f'โค้ดส่วนลดนี้ใช้ได้เมื่อมียอดขั้นต่ำ {promo_obj.min_spend:,.2f} บาท')
+        
+        promo_discount_amount = promo_obj.calculate_discount(amount)
+        amount = max(Decimal('0.00'), amount - promo_discount_amount)
+
     delivery = data.get('delivery_method', 'self_pickup')
     if delivery not in ('self_pickup', 'shipping'):
         raise ValidationError('วิธีรับคืนไม่ถูกต้อง')
@@ -198,7 +222,9 @@ def quote(data, customer=None, allow_missing_price=False):
             'category': category, 'brand': brand, 'member_tier': tier,
             'service_amount_before_discount': str(money(before_discount)),
             'member_discount_percent': str(money(discount_percent)),
-            'member_discount_amount': str(money(before_discount - amount)),
+            'member_discount_amount': str(money(before_discount - (amount + promo_discount_amount))),
+            'promo_code': promo_obj.code if promo_obj else (promo_code_input if promo_code_input else ''),
+            'promo_discount_amount': str(money(promo_discount_amount)),
             'service_amount': str(money(amount)), 'shipping_fee': str(money(shipping)), 'vat_amount': str(vat),
             'subtotal': str(money(total - vat)), 'total': str(total), 'currency': 'THB',
             'prices_include_vat': policy.prices_include_vat, 'delivery_method': delivery,

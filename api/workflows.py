@@ -206,10 +206,19 @@ def create_booking(request):
             defaults={'description': 'Inspection Service'},
         )
 
+        promo_obj = None
+        promo_code_str = snapshot.get('promo_code', '')
+        if promo_code_str:
+            from .models import PromoCode
+            promo_obj = PromoCode.objects.filter(code__iexact=promo_code_str).first()
+            if promo_obj:
+                promo_obj.used_count += 1
+                promo_obj.save(update_fields=['used_count'])
+
         booking = Booking.objects.create(customer=customer, branch=branch, booking_date=date, booking_time=time,
             service_type=service, service_package=snapshot['service_package'], category=snapshot['category'],
             brand_name=snapshot['brand'], model=data['model'], note=data.get('note', ''),
-            price_snapshot=snapshot, delivery_method=snapshot['delivery_method'], shipping_fee=snapshot['shipping_fee'],
+            price_snapshot=snapshot, promo_code=promo_obj, promo_code_str=promo_code_str, delivery_method=snapshot['delivery_method'], shipping_fee=snapshot['shipping_fee'],
             payment_method=payment, payment_evidence=evidence, request_key=key, request_fingerprint=fingerprint,
             payment_status=payment_status_val, status=booking_status_val, **address)
         if payment == 'wallet':

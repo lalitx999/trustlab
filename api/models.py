@@ -162,6 +162,8 @@ class Booking(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     service_package = models.CharField(max_length=20, blank=True, default='')
     price_snapshot = models.JSONField(default=dict, blank=True)
+    promo_code = models.ForeignKey('PromoCode', on_delete=models.SET_NULL, null=True, blank=True, related_name='bookings')
+    promo_code_str = models.CharField(max_length=50, blank=True, default='')
     payment_status = models.CharField(max_length=20, default='unpaid')
     payment_method = models.CharField(max_length=20, blank=True, default='')
     payment_evidence = models.TextField(blank=True, default='')
@@ -502,3 +504,50 @@ class StaffNotification(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['event_key', 'channel'], name='unique_staff_notification_event')]
+
+
+class PromoCode(models.Model):
+    DISCOUNT_TYPE_CHOICES = [
+        ('fixed', 'Fixed Amount (THB)'),
+        ('percentage', 'Percentage (%)'),
+    ]
+
+    code = models.CharField(max_length=50, unique=True, db_index=True)
+    description = models.CharField(max_length=255, blank=True, default='')
+    discount_type = models.CharField(max_length=20, choices=DISCOUNT_TYPE_CHOICES, default='fixed')
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2, help_text="Amount in THB or percentage value")
+    min_spend = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    max_discount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Max discount limit for percentage discount")
+    valid_from = models.DateTimeField(null=True, blank=True)
+    valid_to = models.DateTimeField(null=True, blank=True)
+    usage_limit = models.IntegerField(null=True, blank=True, help_text="Total usage limit across all users")
+    used_count = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def calculate_discount(self, original_price):
+        import decimal
+        if not self.is_active:
+            return decimal.Decimal('0.00')
+        if self.min_spend and original_price < self.min_spend:
+            return decimal.Decimal('0.00')
+        
+        if self.discount_type == 'fixed':
+            discount = min(self.discount_value, original_price)
+        elif self.discount_type == 'percentage':
+            discount = (original_price * self.discount_value) / decimal.Decimal('100.00')
+            if self.max_discount and discount > self.max_discount:
+                discount = self.max_discount
+        else:
+            discount = decimal.Decimal('0.00')
+        
+        return round(discount, 2)
+
+    def __str__(self):
+        return f"{self.code} ({self.get_discount_type_display()} - {self.discount_value})"
+
+    class Meta:
+        db_table = 'promo_codes'
+        ordering = ['-created_at']
+

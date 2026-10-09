@@ -6,7 +6,7 @@ from rest_framework import serializers
 from .models import (
     StaffUser, Branch, Brand, MembershipLevel, BrandPricing,
     ServiceType, Customer, Booking, BookingPhoto,
-    Job, Certificate, CertificateSendLog, Contact, Partner
+    Job, Certificate, CertificateSendLog, Contact, Partner, PromoCode
 )
 
 # Custom field to handle incoming Base64 image strings from frontend uploads
@@ -514,3 +514,15 @@ class PartnerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Partner
         fields = '__all__'
+
+
+class PromoCodeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PromoCode
+        fields = [
+            'id', 'code', 'description', 'discount_type', 'discount_value',
+            'min_spend', 'max_discount', 'valid_from', 'valid_to',
+            'usage_limit', 'used_count', 'is_active', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'used_count', 'created_at', 'updated_at']
+
