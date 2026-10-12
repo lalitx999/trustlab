@@ -385,17 +385,36 @@ class CertificateSerializer(serializers.ModelSerializer):
     photos = serializers.SerializerMethodField()
     all_photos = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
-    expert_name = serializers.SerializerMethodField()
+    serial_number = serializers.CharField(source='job.serial_number', read_only=True, default='')
+    color = serializers.CharField(source='job.color', read_only=True, default='')
+    material = serializers.CharField(source='job.material', read_only=True, default='')
+    accessories = serializers.CharField(source='job.accessories', read_only=True, default='')
+    result = serializers.CharField(source='job.result', read_only=True, default='')
+    pdf_url = serializers.SerializerMethodField()
+    price_snapshot = serializers.SerializerMethodField()
 
     class Meta:
         model = Certificate
         fields = [
-            'id', 'certificate_id', 'job', 'cert_status', 'revoke_reason', 'expired_at',
+            'id', 'certificate_id', 'job', 'cert_status', 'result', 'revoke_reason', 'expired_at',
             'created_at', 'updated_at', 'brand_name', 'model', 'category_name',
             'product_category_id', 'issue_date', 'expire_date', 'validity_days', 'service_package',
+            'serial_number', 'color', 'material', 'accessories', 'pdf_url', 'price_snapshot',
             'photos', 'all_photos', 'branch_name', 'expert_name'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_pdf_url(self, obj):
+        request = self.context.get('request')
+        code = obj.cert_code or obj.id
+        path = f"/api/certificates/{code}/pdf"
+        return request.build_absolute_uri(path) if request else path
+
+    def get_price_snapshot(self, obj):
+        if obj.job and obj.job.booking:
+            return obj.job.booking.price_snapshot or {}
+        return {}
+
 
     def get_validity_days(self, obj):
         if obj.validity_days:

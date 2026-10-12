@@ -487,6 +487,7 @@ def public_verify(request, pk):
     Public Endpoint for verifying Certificate IDs.
     Also parses composite links like booking_id-queue_no (e.g. 12-A012).
     """
+    pk = str(pk).strip()
     cert = None
     if '-' in pk and not pk.upper().startswith('TL-'):
         try:
@@ -497,11 +498,12 @@ def public_verify(request, pk):
             ).first()
         except ValueError:
             pass
-    else:
+    if not cert:
         try:
             cert = resolve_certificate(pk)
         except Exception:
             pass
+
 
     if not cert or cert.job.service_package == 'photo_review':
         return Response(
