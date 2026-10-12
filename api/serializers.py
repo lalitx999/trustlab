@@ -385,6 +385,7 @@ class CertificateSerializer(serializers.ModelSerializer):
     photos = serializers.SerializerMethodField()
     all_photos = serializers.SerializerMethodField()
     branch_name = serializers.SerializerMethodField()
+    expert_name = serializers.SerializerMethodField()
     serial_number = serializers.CharField(source='job.serial_number', read_only=True, default='')
     color = serializers.CharField(source='job.color', read_only=True, default='')
     material = serializers.CharField(source='job.material', read_only=True, default='')

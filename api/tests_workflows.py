@@ -411,3 +411,33 @@ class WorkflowTests(TestCase):
         booking.save()
         self.assertEqual(BookingSerializer(booking).data['member_badge'], 'gold')
         self.assertEqual(BookingSerializer(booking).data['customer_type'], 'Gold')
+
+    def test_promo_code_validation_and_booking_application(self):
+        from .models import PromoCode
+        promo = PromoCode.objects.create(
+            code='PROMO1000',
+            description='Test 1000 THB discount',
+            discount_type='fixed',
+            discount_value=1000,
+            min_spend=1000,
+            is_active=True
+        )
+        val_res = self.client.post('/api/promo-codes/validate', {'code': 'PROMO1000'}, format='json')
+        self.assertEqual(val_res.status_code, 200)
+        self.assertTrue(val_res.data['valid'])
+
+        # Test quote calculation with promo code
+        quote_res = self.client.post('/api/checkout/quote', {**self.data, 'date': str(timezone.localdate()), 'promo_code': 'PROMO1000'}, format='json')
+        self.assertEqual(quote_res.status_code, 200)
+        self.assertEqual(quote_res.data['promo_code'], 'PROMO1000')
+        self.assertEqual(quote_res.data['promo_discount_amount'], '1000.00')
+        self.assertEqual(quote_res.data['service_amount'], '70.00')
+
+    def test_certificate_serializer_fields(self):
+        from .serializers import CertificateSerializer
+        s = CertificateSerializer()
+        self.assertIn('expert_name', s.fields)
+        self.assertIn('certificate_id', s.fields)
+        self.assertIn('price_snapshot', s.fields)
+        self.assertIn('photos', s.fields)
+
