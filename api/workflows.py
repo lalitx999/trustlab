@@ -993,32 +993,42 @@ def walkin(request):
                     setattr(booking, addr_f, val)
                     b_changed = True
 
-        # If package changed, recalculate price quote so price_snapshot and amount update
-        if package_changed:
-            try:
-                from .commerce import quote as calc_quote
-                tier_val = 'general'
-                if booking.customer and getattr(booking.customer, 'membership_level', None):
-                    tier_val = booking.customer.membership_level.level_name.lower()
-                q = calc_quote({
-                    'service_package': booking.service_package,
-                    'category': booking.category,
-                    'brand': booking.brand_name,
-                    'delivery_method': booking.delivery_method,
-                    'membership_level': tier_val,
-                    'promo_code': booking.promo_code_str or '',
-                }, customer=booking.customer, allow_missing_price=True)
-                booking.price_snapshot = q
-                booking.shipping_fee = decimal.Decimal(str(q.get('shipping_fee', 0)))
-                b_changed = True
-            except Exception as e:
-                logger.warning(f"Could not recalculate quote on package update: {e}")
-                if booking.price_snapshot and isinstance(booking.price_snapshot, dict):
-                    snap = dict(booking.price_snapshot)
-                    snap['service_package'] = booking.service_package
-                    snap['validity_days'] = 15 if booking.service_package == 'cert_15d' else (90 if booking.service_package == 'cert_90d' else 0)
-                    booking.price_snapshot = snap
+        # Check for price recalculation or price override (if not already paid)
+        if booking.payment_status != 'paid':
+            recalc_needed = False
+            tier_val = 'general'
+            if booking.customer and getattr(booking.customer, 'membership_level', None):
+                tier_val = booking.customer.membership_level.level_name.lower()
+            quote_payload = {
+                'service_package': booking.service_package,
+                'category': booking.category,
+                'brand': booking.brand_name,
+                'delivery_method': booking.delivery_method,
+                'membership_level': tier_val,
+                'customer_id': booking.customer_id,
+                'promo_code': booking.promo_code_str or '',
+            }
+            if data.get('override_price') is True or (data.get('manual_service_amount') is not None and str(data.get('manual_service_amount')).strip() != ''):
+                quote_payload['manual_service_amount'] = data.get('manual_service_amount')
+                quote_payload['price_reason'] = str(data.get('price_reason') or 'ราคาพิเศษ / โปรโมชั่น').strip()
+                recalc_needed = True
+            elif package_changed or 'service_package' in data or 'category' in data or 'brand' in data or 'delivery_method' in data:
+                if (booking.price_snapshot or {}).get('price_reason') and data.get('override_price') is not False:
+                    quote_payload['manual_service_amount'] = booking.price_snapshot.get('service_amount')
+                    quote_payload['price_reason'] = booking.price_snapshot.get('price_reason')
+                recalc_needed = True
+            elif data.get('override_price') is False and (booking.price_snapshot or {}).get('price_reason'):
+                recalc_needed = True
+
+            if recalc_needed:
+                try:
+                    from .commerce import quote as calc_quote
+                    new_snapshot = calc_quote(quote_payload, customer=booking.customer, allow_missing_price=True)
+                    booking.price_snapshot = new_snapshot
+                    booking.shipping_fee = decimal.Decimal(str(new_snapshot.get('shipping_fee', 0)))
                     b_changed = True
+                except Exception as e:
+                    logger.warning(f"Could not recalculate quote on update: {e}")
 
         if b_changed:
             booking.save()
@@ -1057,29 +1067,32 @@ def walkin(request):
                 job.category = str(data['category']).strip()
 
             # Sync service_package, prices, certificate and shipping status to Job
-            if booking.service_package and job.service_package != booking.service_package:
+            if 'service_package' in data and data['service_package']:
+                job.service_package = str(data['service_package']).strip()
+            elif booking.service_package:
                 job.service_package = booking.service_package
-                if booking.price_snapshot and isinstance(booking.price_snapshot, dict):
-                    job.price_snapshot = booking.price_snapshot
-                    if 'total' in booking.price_snapshot:
-                        try:
-                            job.price = decimal.Decimal(str(booking.price_snapshot['total']))
-                        except Exception:
-                            pass
-                    if 'vat_amount' in booking.price_snapshot:
-                        try:
-                            job.vat_amount = decimal.Decimal(str(booking.price_snapshot['vat_amount']))
-                        except Exception:
-                            pass
 
-                # If job already has a certificate, update certificate validity & expire_date
-                cert = getattr(job, 'certificate', None)
-                if cert and job.service_package in ('cert_15d', 'cert_90d'):
-                    days = 15 if job.service_package == 'cert_15d' else 90
-                    cert.validity_days = days
-                    base_time = cert.created_at or timezone.now()
-                    cert.expires_at = base_time + datetime.timedelta(days=days)
-                    cert.save(update_fields=['validity_days', 'expires_at'])
+            if booking.price_snapshot and isinstance(booking.price_snapshot, dict):
+                job.price_snapshot = booking.price_snapshot
+                if 'total' in booking.price_snapshot:
+                    try:
+                        job.price = decimal.Decimal(str(booking.price_snapshot['total']))
+                    except Exception:
+                        pass
+                if 'vat_amount' in booking.price_snapshot:
+                    try:
+                        job.vat_amount = decimal.Decimal(str(booking.price_snapshot['vat_amount']))
+                    except Exception:
+                        pass
+
+            # If job already has a certificate, update certificate validity & expire_date
+            cert = getattr(job, 'certificate', None)
+            if cert and job.service_package in ('cert_15d', 'cert_90d'):
+                days = 15 if job.service_package == 'cert_15d' else 90
+                cert.validity_days = days
+                base_time = cert.created_at or timezone.now()
+                cert.expires_at = base_time + datetime.timedelta(days=days)
+                cert.save(update_fields=['validity_days', 'expires_at'])
 
             # Sync shipping status with delivery_method
             if booking.delivery_method == 'shipping':
