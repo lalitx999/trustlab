@@ -206,11 +206,26 @@ def customer_create(request):
 
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsStaff])
 def certificate_detail(request, pk):
-    """Retrieves specific certificate details by id or cert_code"""
+    """Retrieves or updates specific certificate details by id or cert_code"""
     cert = resolve_certificate(pk)
+    if request.method in ('PUT', 'PATCH'):
+        new_code = str(request.data.get('cert_code', request.data.get('certificate_id', ''))).strip()
+        if not new_code:
+            return Response({"error": "กรุณาระบุเลขใบเซอร์"}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_code) > 50 or any(c in new_code for c in '/?#'):
+            return Response({"error": "เลขใบเซอร์ต้องไม่เกิน 50 ตัวอักษร และไม่มี / ? #"}, status=status.HTTP_400_BAD_REQUEST)
+        if Certificate.objects.filter(cert_code=new_code).exclude(pk=cert.pk).exists():
+            return Response({"error": "เลขใบเซอร์นี้ถูกใช้แล้ว กรุณาใช้เลขอื่น"}, status=status.HTTP_400_BAD_REQUEST)
+        old_code = cert.cert_code
+        cert.cert_code = new_code
+        cert.save(update_fields=['cert_code'])
+        if getattr(cert, 'job', None) and cert.job.tag_code == old_code:
+            cert.job.tag_code = new_code
+            cert.job.save(update_fields=['tag_code'])
+        return Response(CertificateSerializer(cert, context={'request': request}).data, status=status.HTTP_200_OK)
     return Response(CertificateSerializer(cert, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
